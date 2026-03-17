@@ -242,21 +242,21 @@ async function setupNim(sandboxName, gpu) {
     }
   }
 
-  // Build options list — always show local options but label as experimental
+  // Build options list — only show local options with NEMOCLAW_EXPERIMENTAL=1
   const options = [];
-  if (gpu && gpu.nimCapable) {
+  if (EXPERIMENTAL && gpu && gpu.nimCapable) {
     options.push({ key: "nim", label: "Local NIM container (NVIDIA GPU) [experimental]" });
   }
   options.push({ key: "cloud", label: "NVIDIA Cloud API (build.nvidia.com)" });
-  if (hasOllama || ollamaRunning) {
+  if (EXPERIMENTAL && (hasOllama || ollamaRunning)) {
     options.push({ key: "ollama", label: `Local Ollama (localhost:11434)${ollamaRunning ? " — running" : ""} [experimental]` });
   }
-  if (vllmRunning) {
+  if (EXPERIMENTAL && vllmRunning) {
     options.push({ key: "vllm", label: "Existing vLLM instance (localhost:8000) — running [experimental]" });
   }
 
   // On macOS without Ollama, offer to install it
-  if (!hasOllama && process.platform === "darwin") {
+  if (EXPERIMENTAL && !hasOllama && process.platform === "darwin") {
     options.push({ key: "install-ollama", label: "Install Ollama (macOS) [experimental]" });
   }
 
