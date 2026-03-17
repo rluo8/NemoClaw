@@ -20,12 +20,12 @@ NVIDIA NemoClaw is an open source stack that simplifies running [OpenClaw](https
 
 ## Quick Start
 
-<!-- start-quickstart-guide -->
-
 Follow these steps to get started with NemoClaw and your first sandboxed OpenClaw agent.
 
 > [!NOTE]
 > NemoClaw currently requires a fresh installation of OpenClaw.
+
+<!-- start-quickstart-guide -->
 
 ### Prerequisites
 
