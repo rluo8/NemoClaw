@@ -244,5 +244,5 @@ Troubleshooting <reference/troubleshooting>
 :hidden:
 
 resources/license
-Discord <https://discord.com/invite/nvidiadeveloper>
+Discord <https://discord.gg/XFpfPv9Uvx>
 ```
