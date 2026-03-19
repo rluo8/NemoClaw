@@ -148,6 +148,12 @@ The script removes sandboxes, the NemoClaw gateway and providers, related Docker
 | `--keep-openshell` | Leave the `openshell` binary installed.              |
 | `--delete-models`  | Also remove NemoClaw-pulled Ollama models.           |
 
+For example, to skip the confirmation prompt:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash -s -- --yes
+```
+
 <!-- end-quickstart-guide -->
 
 ---
