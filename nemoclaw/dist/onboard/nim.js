@@ -19,10 +19,11 @@ exports.waitForNimHealth = waitForNimHealth;
 const node_child_process_1 = require("node:child_process");
 const nim_images_json_1 = __importDefault(require("../../../bin/lib/nim-images.json"));
 const MODEL_PULL_ALIASES = {
-    "nvidia/nemotron-3-nano-30b-a3b": ["nvcr.io/nim/nvidia/nemotron-3-nano:latest"],
+    "nvidia/nemotron-3-nano-30b-a3b": ["nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest"],
 };
 const MODEL_API_ALIASES = {
     "nvidia/nemotron-3-nano-30b-a3b": "nvidia/nemotron-3-nano",
+    "z-ai/glm5": "zai-org/GLM-5",
 };
 function normalizeGpuFamily(name) {
     const value = name.toLowerCase();

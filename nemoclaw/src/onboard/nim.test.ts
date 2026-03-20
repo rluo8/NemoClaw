@@ -42,7 +42,7 @@ describe("nim helpers", () => {
 
   it("resolves an image for a known model", () => {
     expect(getImageForModel("nvidia/nemotron-3-nano-30b-a3b")).toBe(
-      "nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
+      "nvcr.io/nim/nvidia/nemotron-3-nano:latest",
     );
   });
 
@@ -103,17 +103,17 @@ describe("nim helpers", () => {
       return "";
     };
     expect(pullNimImage("nvidia/nemotron-3-nano-30b-a3b", runtime)).toBe(
-      "nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
+      "nvcr.io/nim/nvidia/nemotron-3-nano:latest",
     );
-    expect(commands).toEqual(["docker pull nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest"]);
+    expect(commands).toEqual(["docker pull nvcr.io/nim/nvidia/nemotron-3-nano:latest"]);
   });
 
-  it("falls back to an alternate pull target when the primary image is denied", () => {
+  it("falls back to the legacy nano image when the official pull target is denied", () => {
     const commands: string[] = [];
     const runtime: NimRuntime = {
       exec(command: string): string {
         commands.push(command);
-        if (command.includes("nemotron-3-nano-30b-a3b:latest")) {
+        if (command.includes("nemotron-3-nano:latest")) {
           const err = new Error("pull denied") as Error & { stderr?: string };
           err.stderr = 'denied: {"errors":[{"code":"DENIED","message":"Access Denied"}]}';
           throw err;
@@ -123,11 +123,11 @@ describe("nim helpers", () => {
     };
 
     expect(pullNimImage("nvidia/nemotron-3-nano-30b-a3b", runtime)).toBe(
-      "nvcr.io/nim/nvidia/nemotron-3-nano:latest",
+      "nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
     );
     expect(commands).toEqual([
-      "docker pull nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
       "docker pull nvcr.io/nim/nvidia/nemotron-3-nano:latest",
+      "docker pull nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
     ]);
   });
 
@@ -141,7 +141,7 @@ describe("nim helpers", () => {
     startNimContainer("openclaw", "nvidia/nemotron-3-nano-30b-a3b", runtime);
     expect(commands).toEqual([
       "docker rm -f nemoclaw-nim-openclaw 2>/dev/null",
-      "docker run -d --gpus all -p 8000:8000 --name nemoclaw-nim-openclaw --shm-size 16g nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
+      "docker run -d --gpus all -p 8000:8000 --name nemoclaw-nim-openclaw --shm-size 16g nvcr.io/nim/nvidia/nemotron-3-nano:latest",
     ]);
   });
 
@@ -169,7 +169,7 @@ describe("nim helpers", () => {
 
     expect(commands).toEqual([
       "docker rm -f nemoclaw-nim-openclaw 2>/dev/null",
-      "docker run -d --gpus all -p 8000:8000 --name nemoclaw-nim-openclaw --shm-size 16g -e NVIDIA_API_KEY='nvapi-secret' -e NGC_API_KEY='ngc-secret' nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
+      "docker run -d --gpus all -p 8000:8000 --name nemoclaw-nim-openclaw --shm-size 16g -e NVIDIA_API_KEY='nvapi-secret' -e NGC_API_KEY='ngc-secret' nvcr.io/nim/nvidia/nemotron-3-nano:latest",
     ]);
   });
 
@@ -197,7 +197,7 @@ describe("nim helpers", () => {
 
     expect(commands).toEqual([
       "docker rm -f nemoclaw-nim-openclaw 2>/dev/null",
-      "docker run -d --gpus all -p 8000:8000 --name nemoclaw-nim-openclaw --shm-size 16g -e NVIDIA_API_KEY='nvapi-secret' -e NGC_API_KEY='nvapi-secret' nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
+      "docker run -d --gpus all -p 8000:8000 --name nemoclaw-nim-openclaw --shm-size 16g -e NVIDIA_API_KEY='nvapi-secret' -e NGC_API_KEY='nvapi-secret' nvcr.io/nim/nvidia/nemotron-3-nano:latest",
     ]);
   });
 
@@ -221,5 +221,9 @@ describe("nim helpers", () => {
         nimCapable: true,
       }).map((model) => model.name),
     ).toEqual(["nvidia/nemotron-3-nano-30b-a3b"]);
+  });
+
+  it("maps local GLM selection to the served model id exposed by the container", () => {
+    expect(getServedModelForModel("z-ai/glm5")).toBe("zai-org/GLM-5");
   });
 });

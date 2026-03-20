@@ -43,10 +43,11 @@ export interface NimRuntime {
 }
 
 const MODEL_PULL_ALIASES: Record<string, string[]> = {
-  "nvidia/nemotron-3-nano-30b-a3b": ["nvcr.io/nim/nvidia/nemotron-3-nano:latest"],
+  "nvidia/nemotron-3-nano-30b-a3b": ["nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest"],
 };
 const MODEL_API_ALIASES: Record<string, string> = {
   "nvidia/nemotron-3-nano-30b-a3b": "nvidia/nemotron-3-nano",
+  "z-ai/glm5": "zai-org/GLM-5",
 };
 
 function normalizeGpuFamily(name: string): string | null {

@@ -2,7 +2,7 @@
   "models": [
     {
       "name": "nvidia/nemotron-3-nano-30b-a3b",
-      "image": "nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
+      "image": "nvcr.io/nim/nvidia/nemotron-3-nano:latest",
       "servedModel": "nvidia/nemotron-3-nano",
       "minGpuMemoryMB": 32768,
       "recommendedRank": 1,
@@ -101,18 +101,164 @@
       ]
     },
     {
-      "name": "qwen/qwen3-next-80b-a3b-instruct",
-      "image": "nvcr.io/nim/qwen/qwen3-next-80b-a3b-instruct:latest",
-      "minGpuMemoryMB": 86016,
+      "name": "openai/gpt-oss-20b",
+      "image": "nvcr.io/nim/openai/gpt-oss-20b:latest",
+      "minGpuMemoryMB": 96000,
       "recommendedRank": 5,
+      "recommendedFor": ["general", "tool-use", "reasoning"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200", "gb200", "h200"],
+          "minGpuCount": 1,
+          "minPerGpuMemoryMB": 96000,
+          "precision": "mxfp4",
+          "diskSource": "not-published"
+        }
+      ]
+    },
+    {
+      "name": "qwen/qwen3.5-35b-a3b",
+      "image": "nvcr.io/nim/qwen/qwen3.5-35b-a3b:latest",
+      "minGpuMemoryMB": 38000,
+      "recommendedRank": 6,
+      "recommendedFor": ["general", "tool-use"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200", "h200", "h20", "gb200", "rtx-pro-6000-blackwell", "dgx-spark"],
+          "minGpuCount": 1,
+          "minPerGpuMemoryMB": 96000,
+          "minDiskSpaceGB": 72,
+          "precision": "bf16"
+        },
+        {
+          "gpuFamilies": ["b200", "h200", "h20", "gb200", "rtx-pro-6000-blackwell", "dgx-spark"],
+          "minGpuCount": 1,
+          "minPerGpuMemoryMB": 96000,
+          "minDiskSpaceGB": 38,
+          "precision": "fp8"
+        },
+        {
+          "gpuFamilies": ["h100"],
+          "minGpuCount": 1,
+          "minPerGpuMemoryMB": 80000,
+          "minDiskSpaceGB": 38,
+          "precision": "fp8"
+        }
+      ]
+    },
+    {
+      "name": "minimaxai/minimax-m2.5",
+      "image": "nvcr.io/nim/minimax-ai/minimax-m25:latest",
+      "minGpuMemoryMB": 256000,
+      "recommendedRank": 7,
+      "recommendedFor": ["general", "quality"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200"],
+          "minGpuCount": 2,
+          "minPerGpuMemoryMB": 196000,
+          "minDiskSpaceGB": 228,
+          "precision": "fp8"
+        },
+        {
+          "gpuFamilies": ["h200", "h20"],
+          "minGpuCount": 4,
+          "minPerGpuMemoryMB": 96000,
+          "minDiskSpaceGB": 228,
+          "precision": "fp8"
+        },
+        {
+          "gpuFamilies": ["h100"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 80000,
+          "minDiskSpaceGB": 228,
+          "precision": "fp8"
+        },
+        {
+          "gpuFamilies": ["dgx-spark"],
+          "minGpuCount": 2,
+          "minPerGpuMemoryMB": 128000,
+          "minDiskSpaceGB": 228,
+          "precision": "nvfp4"
+        }
+      ]
+    },
+    {
+      "name": "qwen/qwen3.5-122b-a10b",
+      "image": "nvcr.io/nim/qwen/qwen3.5-122b-a10b:latest",
+      "minGpuMemoryMB": 254000,
+      "recommendedRank": 8,
+      "recommendedFor": ["general", "multimodal", "quality"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200", "h100", "h200", "h20", "gb200"],
+          "minGpuCount": 2,
+          "minPerGpuMemoryMB": 80000,
+          "minDiskSpaceGB": 127,
+          "precision": "fp8"
+        },
+        {
+          "gpuFamilies": ["b200", "h100", "h200", "h20", "gb200"],
+          "minGpuCount": 4,
+          "minPerGpuMemoryMB": 80000,
+          "minDiskSpaceGB": 250,
+          "precision": "bf16"
+        }
+      ]
+    },
+    {
+      "name": "moonshotai/kimi-k2.5",
+      "image": "nvcr.io/nim/moonshotai/kimi-k2.5:latest",
+      "minGpuMemoryMB": 1128000,
+      "recommendedRank": 9,
+      "recommendedFor": ["multimodal", "quality"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 192000,
+          "minDiskSpaceGB": 580,
+          "precision": "int4"
+        },
+        {
+          "gpuFamilies": ["h200"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 141000,
+          "minDiskSpaceGB": 580,
+          "precision": "int4"
+        }
+      ]
+    },
+    {
+      "name": "z-ai/glm5",
+      "image": "nvcr.io/nim/zai-org/glm-5:latest",
+      "servedModel": "zai-org/GLM-5",
+      "minGpuMemoryMB": 1128000,
+      "recommendedRank": 10,
       "recommendedFor": ["general", "tool-use", "quality"],
       "profiles": [
         {
-          "gpuFamilies": ["h200", "h20", "h100", "b200"],
-          "minGpuCount": 2,
-          "minPerGpuMemoryMB": 76000,
-          "minDiskSpaceGB": 77,
+          "gpuFamilies": ["b200", "h200", "h20"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 141000,
+          "minDiskSpaceGB": 736,
           "precision": "fp8"
+        }
+      ]
+    },
+    {
+      "name": "openai/gpt-oss-120b",
+      "image": "nvcr.io/nim/openai/gpt-oss-120b:latest",
+      "minGpuMemoryMB": 96000,
+      "recommendedRank": 11,
+      "recommendedFor": ["general", "tool-use", "reasoning"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200", "gb200", "h200"],
+          "minGpuCount": 1,
+          "minPerGpuMemoryMB": 96000,
+          "precision": "mxfp4",
+          "diskSource": "not-published"
         }
       ]
     },
@@ -120,7 +266,7 @@
       "name": "nvidia/nemotron-3-super-120b-a12b",
       "image": "nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:latest",
       "minGpuMemoryMB": 184320,
-      "recommendedRank": 6,
+      "recommendedRank": 12,
       "recommendedFor": ["general", "tool-use", "quality"],
       "profiles": [
         {
@@ -146,6 +292,45 @@
           "minDiskSpaceGB": 480,
           "precision": "bf16",
           "diskSource": "estimate"
+        }
+      ]
+    },
+    {
+      "name": "deepseek-ai/deepseek-v3.1-terminus",
+      "image": "nvcr.io/nim/deepseek-ai/deepseek-v3.1-terminus:latest",
+      "minGpuMemoryMB": 768000,
+      "recommendedRank": 13,
+      "recommendedFor": ["reasoning", "quality"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 180000,
+          "minDiskSpaceGB": 411,
+          "precision": "nvfp4"
+        },
+        {
+          "gpuFamilies": ["h200", "h20"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 141000,
+          "minDiskSpaceGB": 668,
+          "precision": "fp8"
+        }
+      ]
+    },
+    {
+      "name": "qwen/qwen3.5-397b-a17b",
+      "image": "nvcr.io/nim/qwen/qwen3.5-397b-a17b:latest",
+      "minGpuMemoryMB": 819200,
+      "recommendedRank": 14,
+      "recommendedFor": ["multimodal", "quality"],
+      "profiles": [
+        {
+          "gpuFamilies": ["b200", "h200"],
+          "minGpuCount": 8,
+          "minPerGpuMemoryMB": 141000,
+          "minDiskSpaceGB": 780,
+          "precision": "bf16"
         }
       ]
     }

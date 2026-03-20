@@ -9,8 +9,8 @@ const nim = require("../bin/lib/nim");
 
 describe("nim", () => {
   describe("listModels", () => {
-    it("returns the curated local NIM shortlist", () => {
-      assert.equal(nim.listModels().length, 6);
+    it("returns the bundled local NIM catalog", () => {
+      assert.equal(nim.listModels().length, 14);
     });
 
     it("each model has hardware metadata for selection", () => {
@@ -29,7 +29,7 @@ describe("nim", () => {
     it("returns correct image for known model", () => {
       assert.equal(
         nim.getImageForModel("nvidia/nemotron-3-nano-30b-a3b"),
-        "nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest"
+        "nvcr.io/nim/nvidia/nemotron-3-nano:latest"
       );
     });
 
@@ -55,14 +55,14 @@ describe("nim", () => {
   });
 
   describe("pullNimImage", () => {
-    it("falls back to the alternate nano image when the primary pull is denied", () => {
+    it("falls back to the legacy nano image when the official pull target is denied", () => {
       const runnerPath = path.join(__dirname, "..", "bin", "lib", "runner.js");
       const originalRun = require(runnerPath).run;
       const runner = require(runnerPath);
       const commands = [];
       runner.run = (command) => {
         commands.push(command);
-        if (command.includes("nemotron-3-nano-30b-a3b:latest")) {
+        if (command.includes("nemotron-3-nano:latest")) {
           return { status: 1 };
         }
         return { status: 0 };
@@ -71,15 +71,15 @@ describe("nim", () => {
       try {
         assert.equal(
           nim.pullNimImage("nvidia/nemotron-3-nano-30b-a3b"),
-          "nvcr.io/nim/nvidia/nemotron-3-nano:latest"
+          "nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest"
         );
       } finally {
         runner.run = originalRun;
       }
 
       assert.deepEqual(commands, [
-        "docker pull nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
         "docker pull nvcr.io/nim/nvidia/nemotron-3-nano:latest",
+        "docker pull nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest",
       ]);
     });
   });
@@ -158,7 +158,8 @@ describe("nim", () => {
           "deepseek-ai/deepseek-r1-distill-qwen-32b",
           "nvidia/llama-3.3-nemotron-super-49b-v1.5",
           "qwen/qwen3-coder-next",
-          "qwen/qwen3-next-80b-a3b-instruct",
+          "qwen/qwen3.5-35b-a3b",
+          "qwen/qwen3.5-122b-a10b",
         ]
       );
     });
