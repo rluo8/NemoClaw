@@ -976,10 +976,20 @@ async function onboard(opts = {}) {
 // compatibility during this transition.
 
 function startMessagingBridges(sandboxName) {
+  // Rehydrate file-backed credentials into process.env so start-services.sh
+  // and bridge.js can see them (they only check process.env, not credentials.json).
+  const bridgeTokens = ["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
+  for (const key of bridgeTokens) {
+    if (!process.env[key]) {
+      const val = getCredential(key);
+      if (val) process.env[key] = val;
+    }
+  }
+
   const hasMessagingToken =
-    getCredential("TELEGRAM_BOT_TOKEN") || process.env.TELEGRAM_BOT_TOKEN ||
-    getCredential("DISCORD_BOT_TOKEN") || process.env.DISCORD_BOT_TOKEN ||
-    getCredential("SLACK_BOT_TOKEN") || process.env.SLACK_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN ||
+    process.env.DISCORD_BOT_TOKEN ||
+    process.env.SLACK_BOT_TOKEN;
 
   if (!hasMessagingToken) return;
 

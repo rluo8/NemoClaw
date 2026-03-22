@@ -133,8 +133,12 @@ if (args[0] === "--list") {
   const configs = loadBridgeConfigs();
   console.log("\nAvailable bridges:\n");
   for (const c of configs) {
-    const token = process.env[c.credential_env] ? "✓" : "✗";
-    console.log(`  ${token} ${c.name.padEnd(12)} ${c.type} bridge  (${c.credential_env})`);
+    const hasMain = !!process.env[c.credential_env];
+    const extraEnvs = Array.isArray(c.extra_credential_env) ? c.extra_credential_env : [];
+    const hasAll = hasMain && extraEnvs.every((e) => !!process.env[e]);
+    const status = hasAll ? "✓" : "✗";
+    const envList = [c.credential_env, ...extraEnvs].join(", ");
+    console.log(`  ${status} ${c.name.padEnd(12)} ${c.type} bridge  (${envList})`);
   }
   console.log("");
   process.exit(0);

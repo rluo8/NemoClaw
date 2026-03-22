@@ -11,9 +11,9 @@ const https = require("https");
 
 module.exports = function createAdapter(config) {
   const TOKEN = process.env[config.credential_env];
-  const ALLOWED = process.env[config.allowed_env]
-    ? process.env[config.allowed_env].split(",").map((s) => s.trim())
-    : null;
+  // Support legacy ALLOWED_CHAT_IDS for backwards compatibility
+  const allowedRaw = process.env[config.allowed_env] || process.env.ALLOWED_CHAT_IDS;
+  const ALLOWED = allowedRaw ? allowedRaw.split(",").map((s) => s.trim()) : null;
 
   let offset = 0;
 
@@ -35,6 +35,7 @@ module.exports = function createAdapter(config) {
           });
         },
       );
+      req.setTimeout(60000, () => req.destroy(new Error("Telegram API request timed out")));
       req.on("error", reject);
       req.write(data);
       req.end();
