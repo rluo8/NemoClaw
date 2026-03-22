@@ -25,27 +25,24 @@ const { runAgentInSandbox, SANDBOX } = require("./bridge-core");
 
 const yaml = require("js-yaml");
 
-const BRIDGES_DIR = path.join(__dirname, "..", "nemoclaw-blueprint", "bridges");
+const BLUEPRINT_PATH = path.join(__dirname, "..", "nemoclaw-blueprint", "blueprint.yaml");
 
-// ── Load bridge configs ───────────────────────────────────────────
+// ── Load bridge configs from blueprint.yaml ───────────────────────
 
 function loadBridgeConfigs() {
-  const configs = [];
-  if (!fs.existsSync(BRIDGES_DIR)) return configs;
-
-  for (const typeDir of fs.readdirSync(BRIDGES_DIR, { withFileTypes: true })) {
-    if (!typeDir.isDirectory()) continue;
-    const typePath = path.join(BRIDGES_DIR, typeDir.name);
-
-    for (const file of fs.readdirSync(typePath)) {
-      if (!file.endsWith(".yaml") && !file.endsWith(".yml")) continue;
-      const content = fs.readFileSync(path.join(typePath, file), "utf-8");
-      const parsed = yaml.load(content);
-      if (parsed.bridge) configs.push(parsed.bridge);
-    }
+  if (!fs.existsSync(BLUEPRINT_PATH)) {
+    console.error(`Blueprint not found: ${BLUEPRINT_PATH}`);
+    return [];
   }
 
-  return configs;
+  const blueprint = yaml.load(fs.readFileSync(BLUEPRINT_PATH, "utf-8"));
+  const bridges = blueprint.components?.bridges;
+  if (!bridges) return [];
+
+  return Object.entries(bridges).map(([name, config]) => ({
+    name,
+    ...config,
+  }));
 }
 
 function findAdapter(config) {
@@ -60,7 +57,7 @@ function findAdapter(config) {
 // ── Message flow engine ───────────────────────────────────────────
 
 async function runBridge(config) {
-  const tokenEnv = config.credentials.token_env;
+  const tokenEnv = config.credential_env;
   const token = process.env[tokenEnv];
   if (!token) {
     console.error(`${tokenEnv} required for ${config.name} bridge`);
@@ -68,7 +65,7 @@ async function runBridge(config) {
   }
 
   // Check extra required env vars (e.g., SLACK_APP_TOKEN)
-  const extraEnvs = config.credentials.extra_env;
+  const extraEnvs = config.extra_credential_env;
   if (Array.isArray(extraEnvs)) {
     for (const env of extraEnvs) {
       if (!process.env[env]) {
@@ -82,8 +79,8 @@ async function runBridge(config) {
   if (!createAdapter) process.exit(1);
 
   const adapter = createAdapter(config);
-  const prefix = config.messaging.session_prefix;
-  const maxChunk = config.messaging.max_chunk_size;
+  const prefix = config.session_prefix;
+  const maxChunk = config.max_chunk_size;
 
   async function onMessage(msg) {
     console.log(`[${config.name}] [${msg.channelId}] ${msg.userName}: inbound (len=${msg.text.length})`);
@@ -136,8 +133,8 @@ if (args[0] === "--list") {
   const configs = loadBridgeConfigs();
   console.log("\nAvailable bridges:\n");
   for (const c of configs) {
-    const token = process.env[c.credentials.token_env] ? "✓" : "✗";
-    console.log(`  ${token} ${c.name.padEnd(12)} ${c.description}  (${c.credentials.token_env})`);
+    const token = process.env[c.credential_env] ? "✓" : "✗";
+    console.log(`  ${token} ${c.name.padEnd(12)} ${c.type} bridge  (${c.credential_env})`);
   }
   console.log("");
   process.exit(0);

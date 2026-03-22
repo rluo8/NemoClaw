@@ -10,9 +10,9 @@
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 
 module.exports = function createAdapter(config) {
-  const TOKEN = process.env[config.credentials.token_env];
-  const ALLOWED = process.env[config.credentials.allowed_env]
-    ? process.env[config.credentials.allowed_env].split(",").map((s) => s.trim())
+  const TOKEN = process.env[config.credential_env];
+  const ALLOWED = process.env[config.allowed_env]
+    ? process.env[config.allowed_env].split(",").map((s) => s.trim())
     : null;
 
   return {

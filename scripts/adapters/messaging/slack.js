@@ -10,10 +10,10 @@
 const { App } = require("@slack/bolt");
 
 module.exports = function createAdapter(config) {
-  const BOT_TOKEN = process.env[config.credentials.token_env];
+  const BOT_TOKEN = process.env[config.credential_env];
   const APP_TOKEN = process.env.SLACK_APP_TOKEN;
-  const ALLOWED = process.env[config.credentials.allowed_env]
-    ? process.env[config.credentials.allowed_env].split(",").map((s) => s.trim())
+  const ALLOWED = process.env[config.allowed_env]
+    ? process.env[config.allowed_env].split(",").map((s) => s.trim())
     : null;
 
   if (!APP_TOKEN) {

@@ -225,15 +225,16 @@ describe("runner helpers", () => {
       }
     });
 
-    it("each messaging bridge has a YAML config", () => {
+    it("blueprint.yaml defines bridge configs for all messaging platforms", () => {
       const fs = require("fs");
-      const bridgesDir = path.join(__dirname, "..", "nemoclaw-blueprint", "bridges", "messaging");
+      const yaml = require("js-yaml");
+      const bp = yaml.load(fs.readFileSync(path.join(__dirname, "..", "nemoclaw-blueprint", "blueprint.yaml"), "utf-8"));
+      const bridges = bp.components.bridges;
       for (const name of ["telegram", "discord", "slack"]) {
-        const yamlPath = path.join(bridgesDir, `${name}.yaml`);
-        assert.ok(fs.existsSync(yamlPath), `bridge config ${name}.yaml must exist`);
-        const src = fs.readFileSync(yamlPath, "utf-8");
-        assert.ok(src.includes("token_env:"), `${name}.yaml must specify token_env`);
-        assert.ok(src.includes("session_prefix:"), `${name}.yaml must specify session_prefix`);
+        assert.ok(bridges[name], `blueprint must define ${name} bridge`);
+        assert.ok(bridges[name].credential_env, `${name} bridge must specify credential_env`);
+        assert.ok(bridges[name].session_prefix, `${name} bridge must specify session_prefix`);
+        assert.ok(bridges[name].adapter, `${name} bridge must specify adapter`);
       }
     });
   });
