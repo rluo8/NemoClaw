@@ -179,6 +179,10 @@ async function deploy(instanceName) {
     const sshConfigOut = execFileSync("ssh", ["-G", name], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
     const realHost = sshConfigOut.split("\n").find((l) => l.startsWith("hostname "))?.split(" ")[1] || name;
     const hostKeys = execFileSync("ssh-keyscan", ["-H", realHost], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    if (!hostKeys.trim()) {
+      console.error(`  Failed to capture host keys for ${realHost}. Cannot verify host identity.`);
+      process.exit(1);
+    }
     fs.writeFileSync(knownHostsFile, hostKeys, { mode: 0o600 });
 
     const sshOpts = `-o UserKnownHostsFile=${shellQuote(knownHostsFile)} -o StrictHostKeyChecking=yes -o LogLevel=ERROR`;
