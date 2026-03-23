@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-const { describe, it } = require("node:test");
-const assert = require("node:assert/strict");
-
-const net = require("net");
-const { checkPortAvailable } = require("../bin/lib/preflight");
+import { describe, it, expect } from "vitest";
+import net from "node:net";
+import { checkPortAvailable } from "../bin/lib/preflight";
 
 describe("checkPortAvailable", () => {
   it("falls through to net probe when lsof output is empty", async () => {
@@ -20,7 +18,7 @@ describe("checkPortAvailable", () => {
       });
     });
     const result = await checkPortAvailable(freePort, { lsofOutput: "" });
-    assert.deepEqual(result, { ok: true });
+    expect(result).toEqual({ ok: true });
   });
 
   it("net probe catches occupied port even when lsof returns empty", async () => {
@@ -32,9 +30,9 @@ describe("checkPortAvailable", () => {
     });
     try {
       const result = await checkPortAvailable(port, { lsofOutput: "" });
-      assert.equal(result.ok, false);
-      assert.equal(result.process, "unknown");
-      assert.ok(result.reason.includes("EADDRINUSE"));
+      expect(result.ok).toBe(false);
+      expect(result.process).toBe("unknown");
+      expect(result.reason.includes("EADDRINUSE")).toBeTruthy();
     } finally {
       await new Promise((resolve) => srv.close(resolve));
     }
@@ -46,10 +44,10 @@ describe("checkPortAvailable", () => {
       "openclaw  12345   root    7u  IPv4  54321      0t0  TCP *:18789 (LISTEN)",
     ].join("\n");
     const result = await checkPortAvailable(18789, { lsofOutput });
-    assert.equal(result.ok, false);
-    assert.equal(result.process, "openclaw");
-    assert.equal(result.pid, 12345);
-    assert.ok(result.reason.includes("openclaw"));
+    expect(result.ok).toBe(false);
+    expect(result.process).toBe("openclaw");
+    expect(result.pid).toBe(12345);
+    expect(result.reason.includes("openclaw")).toBeTruthy();
   });
 
   it("picks first listener when lsof shows multiple", async () => {
@@ -59,9 +57,9 @@ describe("checkPortAvailable", () => {
       "node      222   root    8u  IPv4  54322      0t0  TCP *:18789 (LISTEN)",
     ].join("\n");
     const result = await checkPortAvailable(18789, { lsofOutput });
-    assert.equal(result.ok, false);
-    assert.equal(result.process, "gateway");
-    assert.equal(result.pid, 111);
+    expect(result.ok).toBe(false);
+    expect(result.process).toBe("gateway");
+    expect(result.pid).toBe(111);
   });
 
   it("net probe returns ok for a free port", async () => {
@@ -74,7 +72,7 @@ describe("checkPortAvailable", () => {
       });
     });
     const result = await checkPortAvailable(freePort, { skipLsof: true });
-    assert.deepEqual(result, { ok: true });
+    expect(result).toEqual({ ok: true });
   });
 
   it("net probe detects occupied port", async () => {
@@ -84,9 +82,9 @@ describe("checkPortAvailable", () => {
     });
     try {
       const result = await checkPortAvailable(port, { skipLsof: true });
-      assert.equal(result.ok, false);
-      assert.equal(result.process, "unknown");
-      assert.ok(result.reason.includes("EADDRINUSE"));
+      expect(result.ok).toBe(false);
+      expect(result.process).toBe("unknown");
+      expect(result.reason.includes("EADDRINUSE")).toBeTruthy();
     } finally {
       await new Promise((resolve) => srv.close(resolve));
     }
@@ -101,13 +99,13 @@ describe("checkPortAvailable", () => {
       });
     });
     const result = await checkPortAvailable(freePort);
-    assert.equal(result.ok, true);
+    expect(result.ok).toBe(true);
   });
 
   it("defaults to port 18789 when no args given", async () => {
     // Should not throw — just verify it returns a valid result object
     const result = await checkPortAvailable();
-    assert.equal(typeof result.ok, "boolean");
+    expect(typeof result.ok).toBe("boolean");
   });
 
   it("checks gateway port 8080", async () => {
@@ -120,6 +118,6 @@ describe("checkPortAvailable", () => {
     });
     // Verify the function works with any port (including 8080-range)
     const result = await checkPortAvailable(freePort);
-    assert.equal(result.ok, true);
+    expect(result.ok).toBe(true);
   });
 });
