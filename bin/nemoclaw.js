@@ -68,14 +68,72 @@ function runOpenshell(args, opts = {}) {
   return result;
 }
 
-function getSandboxGatewayState(sandboxName) {
-  const result = spawnSync(getOpenshellBinary(), ["sandbox", "get", sandboxName], {
+function captureOpenshell(args, opts = {}) {
+  const result = spawnSync(getOpenshellBinary(), args, {
     cwd: ROOT,
-    env: process.env,
+    env: { ...process.env, ...opts.env },
     encoding: "utf-8",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const output = `${result.stdout || ""}${result.stderr || ""}`.trim();
+  return {
+    status: result.status ?? 1,
+    output: `${result.stdout || ""}${result.stderr || ""}`.trim(),
+  };
+}
+
+function stripAnsi(value = "") {
+  // eslint-disable-next-line no-control-regex
+  return String(value).replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function hasNamedGateway(output = "") {
+  return stripAnsi(output).includes("Gateway: nemoclaw");
+}
+
+function getNamedGatewayLifecycleState() {
+  const status = captureOpenshell(["status"]);
+  const gatewayInfo = captureOpenshell(["gateway", "info", "-g", "nemoclaw"], { ignoreError: true });
+  const connected = /Connected/i.test(stripAnsi(status.output));
+  const named = hasNamedGateway(gatewayInfo.output);
+  if (connected && named) {
+    return { state: "healthy_named", status: status.output, gatewayInfo: gatewayInfo.output };
+  }
+  if (named) {
+    return { state: "named_unhealthy", status: status.output, gatewayInfo: gatewayInfo.output };
+  }
+  if (connected) {
+    return { state: "connected_other", status: status.output, gatewayInfo: gatewayInfo.output };
+  }
+  return { state: "missing_named", status: status.output, gatewayInfo: gatewayInfo.output };
+}
+
+function recoverNamedGatewayRuntime() {
+  const before = getNamedGatewayLifecycleState();
+  if (before.state === "healthy_named") {
+    return { recovered: true, before, after: before, attempted: false };
+  }
+
+  runOpenshell(["gateway", "select", "nemoclaw"], { ignoreError: true });
+  let after = getNamedGatewayLifecycleState();
+  if (after.state === "healthy_named") {
+    process.env.OPENSHELL_GATEWAY = "nemoclaw";
+    return { recovered: true, before, after, attempted: true, via: "select" };
+  }
+
+  runOpenshell(["gateway", "start", "--name", "nemoclaw"], { ignoreError: true });
+  runOpenshell(["gateway", "select", "nemoclaw"], { ignoreError: true });
+  after = getNamedGatewayLifecycleState();
+  if (after.state === "healthy_named") {
+    process.env.OPENSHELL_GATEWAY = "nemoclaw";
+    return { recovered: true, before, after, attempted: true, via: "start" };
+  }
+
+  return { recovered: false, before, after, attempted: true };
+}
+
+function getSandboxGatewayState(sandboxName) {
+  const result = captureOpenshell(["sandbox", "get", sandboxName]);
+  const output = result.output;
   if (result.status === 0) {
     return { state: "present", output };
   }
@@ -92,7 +150,7 @@ function printGatewayLifecycleHint(output = "", sandboxName = "", writer = conso
   if (/handshake verification failed/i.test(output)) {
     writer("  This looks like gateway identity drift after restart.");
     writer("  Existing sandboxes may still be recorded locally, but the current gateway no longer trusts their prior connection state.");
-    writer("  Try re-establishing the NemoClaw gateway/runtime first. If the sandbox is still unreachable, recreate it with `nemoclaw onboard`.");
+    writer("  Try re-establishing the NemoClaw gateway/runtime first. If the sandbox is still unreachable, recreate just that sandbox with `nemoclaw onboard`.");
     return;
   }
   if (/Connection refused|transport error/i.test(output)) {
@@ -106,8 +164,40 @@ function printGatewayLifecycleHint(output = "", sandboxName = "", writer = conso
   }
 }
 
+function getReconciledSandboxGatewayState(sandboxName) {
+  let lookup = getSandboxGatewayState(sandboxName);
+  if (lookup.state === "present") {
+    return lookup;
+  }
+  if (lookup.state === "missing") {
+    return lookup;
+  }
+
+  if (lookup.state === "gateway_error") {
+    const recovery = recoverNamedGatewayRuntime();
+    if (recovery.recovered) {
+      const retried = getSandboxGatewayState(sandboxName);
+      if (retried.state === "present" || retried.state === "missing") {
+        return { ...retried, recoveredGateway: true, recoveryVia: recovery.via || null };
+      }
+      if (/handshake verification failed/i.test(retried.output)) {
+        return {
+          state: "identity_drift",
+          output: retried.output,
+          recoveredGateway: true,
+          recoveryVia: recovery.via || null,
+        };
+      }
+      return { ...retried, recoveredGateway: true, recoveryVia: recovery.via || null };
+    }
+    return { ...lookup, gatewayRecoveryFailed: true };
+  }
+
+  return lookup;
+}
+
 function ensureLiveSandboxOrExit(sandboxName) {
-  const lookup = getSandboxGatewayState(sandboxName);
+  const lookup = getReconciledSandboxGatewayState(sandboxName);
   if (lookup.state === "present") {
     return lookup;
   }
@@ -116,6 +206,15 @@ function ensureLiveSandboxOrExit(sandboxName) {
     console.error(`  Sandbox '${sandboxName}' is not present in the live OpenShell gateway.`);
     console.error("  Removed stale local registry entry.");
     console.error("  Run `nemoclaw list` to confirm the remaining sandboxes, or `nemoclaw onboard` to create a new one.");
+    process.exit(1);
+  }
+  if (lookup.state === "identity_drift") {
+    console.error(`  Sandbox '${sandboxName}' is recorded locally, but the gateway trust material rotated after restart.`);
+    if (lookup.output) {
+      console.error(lookup.output);
+    }
+    console.error("  Existing sandbox connections cannot be reattached safely after this gateway identity change.");
+    console.error("  Recreate this sandbox with `nemoclaw onboard` once the gateway runtime is stable.");
     process.exit(1);
   }
   console.error(`  Unable to verify sandbox '${sandboxName}' against the live OpenShell gateway.`);
@@ -406,15 +505,27 @@ function sandboxStatus(sandboxName) {
       console.log(`    Policies: ${(sb.policies || []).join(", ") || "none"}`);
   }
 
-  const lookup = getSandboxGatewayState(sandboxName);
+  const lookup = getReconciledSandboxGatewayState(sandboxName);
   if (lookup.state === "present") {
     console.log("");
+    if (lookup.recoveredGateway) {
+      console.log(`  Recovered NemoClaw gateway runtime via ${lookup.recoveryVia || "gateway reattach"}.`);
+      console.log("");
+    }
     console.log(lookup.output);
   } else if (lookup.state === "missing") {
     registry.removeSandbox(sandboxName);
     console.log("");
     console.log(`  Sandbox '${sandboxName}' is not present in the live OpenShell gateway.`);
     console.log("  Removed stale local registry entry.");
+  } else if (lookup.state === "identity_drift") {
+    console.log("");
+    console.log(`  Sandbox '${sandboxName}' is recorded locally, but the gateway trust material rotated after restart.`);
+    if (lookup.output) {
+      console.log(lookup.output);
+    }
+    console.log("  Existing sandbox connections cannot be reattached safely after this gateway identity change.");
+    console.log("  Recreate this sandbox with `nemoclaw onboard` once the gateway runtime is stable.");
   } else {
     console.log("");
     console.log(`  Could not verify sandbox '${sandboxName}' against the live OpenShell gateway.`);
