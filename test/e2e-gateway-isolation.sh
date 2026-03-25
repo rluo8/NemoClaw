@@ -192,7 +192,7 @@ fi
 info "12. Entrypoint drops dangerous capabilities from bounding set"
 # Run the entrypoint (which re-execs through capsh) and check CapBnd.
 # The entrypoint drops cap_net_raw (bit 13 = 0x2000) among others.
-# We read /proc/1/status CapBnd after the entrypoint has run.
+# We read /proc/self/status CapBnd after the entrypoint has run.
 OUT=$(docker run --rm "$IMAGE" bash -c '
   # We are inside the capsh-wrapped entrypoint. Read our bounding set.
   CAP_BND=$(grep "^CapBnd:" /proc/self/status | awk "{print \$2}")
