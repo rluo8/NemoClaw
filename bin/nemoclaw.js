@@ -88,6 +88,24 @@ function getSandboxGatewayState(sandboxName) {
   return { state: "unknown_error", output };
 }
 
+function printGatewayLifecycleHint(output = "", sandboxName = "", writer = console.error) {
+  if (/handshake verification failed/i.test(output)) {
+    writer("  This looks like gateway identity drift after restart.");
+    writer("  Existing sandboxes may still be recorded locally, but the current gateway no longer trusts their prior connection state.");
+    writer("  Try re-establishing the NemoClaw gateway/runtime first. If the sandbox is still unreachable, recreate it with `nemoclaw onboard`.");
+    return;
+  }
+  if (/Connection refused|transport error/i.test(output)) {
+    writer(`  The sandbox '${sandboxName}' may still exist, but the current gateway/runtime is not reachable.`);
+    writer("  Check `openshell status`, verify the active gateway, and retry.");
+    return;
+  }
+  if (/Missing gateway auth token|device identity required/i.test(output)) {
+    writer("  The gateway is reachable, but the current auth or device identity state is not usable.");
+    writer("  Verify the active gateway and retry after re-establishing the runtime.");
+  }
+}
+
 function ensureLiveSandboxOrExit(sandboxName) {
   const lookup = getSandboxGatewayState(sandboxName);
   if (lookup.state === "present") {
@@ -104,6 +122,7 @@ function ensureLiveSandboxOrExit(sandboxName) {
   if (lookup.output) {
     console.error(lookup.output);
   }
+  printGatewayLifecycleHint(lookup.output, sandboxName);
   console.error("  Check `openshell status` and the active gateway, then retry.");
   process.exit(1);
 }
@@ -402,6 +421,7 @@ function sandboxStatus(sandboxName) {
     if (lookup.output) {
       console.log(lookup.output);
     }
+    printGatewayLifecycleHint(lookup.output, sandboxName, console.log);
   }
 
   // NIM health

@@ -185,6 +185,7 @@ describe("CLI dispatch", () => {
 
     expect(r.code).toBe(0);
     expect(r.out.includes("Could not verify sandbox 'alpha'")).toBeTruthy();
+    expect(r.out.includes("gateway identity drift after restart")).toBeTruthy();
     const saved = JSON.parse(fs.readFileSync(path.join(registryDir, "sandboxes.json"), "utf8"));
     expect(saved.sandboxes.alpha).toBeTruthy();
   });
