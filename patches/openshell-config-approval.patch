@@ -5,7 +5,7 @@ index 5503637..f932e82 100644
 @@ -286,6 +286,25 @@ impl CachedOpenShellClient {
          Ok(())
      }
- 
+
 +    /// Fetch draft policy chunks (used to find approved config: chunks).
 +    pub async fn get_draft_policy(
 +        &self,
@@ -50,11 +50,11 @@ index 493e4d2..0de9149 100644
 +            });
          }
      }
- 
+
 @@ -1300,6 +1312,192 @@ async fn flush_proposals_to_gateway(
      Ok(())
  }
- 
+
 +// ---------------------------------------------------------------------------
 +// NemoClaw POC: config-request scanner + approved-config applier
 +// ---------------------------------------------------------------------------
@@ -246,13 +246,13 @@ index 493e4d2..0de9149 100644
  async fn run_policy_poll_loop(
 @@ -1348,6 +1546,8 @@ async fn run_policy_poll_loop(
          };
- 
+
          if result.config_revision == current_config_revision {
 +            // Check for approved config chunks even when policy hasn't changed.
 +            apply_approved_config_chunks(endpoint, sandbox_id).await;
              continue;
          }
- 
+
 diff --git a/crates/openshell-server/src/grpc.rs b/crates/openshell-server/src/grpc.rs
 index fd4bf58..323def7 100644
 --- a/crates/openshell-server/src/grpc.rs
@@ -273,7 +273,7 @@ index fd4bf58..323def7 100644
 -            "ApproveDraftChunk: merging rule into active policy"
 +            "ApproveDraftChunk: processing"
          );
- 
+
 +        // Config-change chunks (rule_name starts with "config:") skip network
 +        // policy merge — they are handled by NemoClaw's config overrides system.
 +        if chunk.rule_name.starts_with("config:") {
@@ -305,7 +305,7 @@ index 528d1c6..c912149 100644
 --- a/crates/openshell-tui/src/ui/sandbox_draft.rs
 +++ b/crates/openshell-tui/src/ui/sandbox_draft.rs
 @@ -22,12 +22,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
- 
+
      let title = if pending_count > 0 {
          Line::from(vec![
 -            Span::styled(" Network Rules ", t.heading),
@@ -317,12 +317,12 @@ index 528d1c6..c912149 100644
 -        Line::from(Span::styled(" Network Rules ", t.heading))
 +        Line::from(Span::styled(" Rules & Config ", t.heading))
      };
- 
+
      let mut block = Block::default()
 @@ -111,15 +111,27 @@ pub fn draw(frame: &mut Frame<'_>, app: &mut App, area: Rect) {
                  spans.push(Span::raw("  "));
              }
- 
+
 -            // Endpoint summary (host:port).
 -            let endpoint_str = chunk
 -                .proposed_rule
@@ -331,7 +331,7 @@ index 528d1c6..c912149 100644
 -                .map(|ep| format!("{}:{}", ep.host, ep.port))
 -                .unwrap_or_default();
 +            let is_config_chunk = chunk.rule_name.starts_with("config:");
- 
+
 -            spans.push(Span::styled(&chunk.rule_name, name_style));
 +            let endpoint_str = if is_config_chunk {
 +                String::new()
