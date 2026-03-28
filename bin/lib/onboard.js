@@ -1653,7 +1653,7 @@ async function startGatewayWithOptions(_gpu, { exitOnFailure = true } = {}) {
       console.error("  Stale state removed. Please rerun: nemoclaw onboard");
       console.error("");
       console.error("  Troubleshooting:");
-      console.error("    openshell doctor logs -g nemoclaw");
+      console.error("    openshell doctor logs --name nemoclaw");
       console.error("    openshell doctor check");
       process.exit(1);
     }
