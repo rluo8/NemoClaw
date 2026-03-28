@@ -1619,7 +1619,7 @@ async function startGatewayWithOptions(_gpu, { exitOnFailure = true } = {}) {
   // internal health-check window allows. Retrying after a clean destroy lets
   // the second attempt benefit from cached images and cleaner cgroup state.
   // See: https://github.com/NVIDIA/OpenShell/issues/433
-  const MAX_GATEWAY_ATTEMPTS = 3;
+  const MAX_GATEWAY_ATTEMPTS = exitOnFailure ? 3 : 1;
   const GATEWAY_RETRY_DELAYS = [10, 30]; // seconds before 2nd, 3rd attempt
   let gatewayStarted = false;
 
@@ -1643,7 +1643,7 @@ async function startGatewayWithOptions(_gpu, { exitOnFailure = true } = {}) {
           healthy = true;
           break;
         }
-        sleep(2);
+        if (i < 4) sleep(2);
       }
       if (healthy) {
         gatewayStarted = true;
