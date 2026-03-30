@@ -477,6 +477,11 @@ function upsertProvider(name, type, credentialEnv, baseUrl, env = {}) {
   }
 }
 
+function verifyProviderExists(name) {
+  const output = runCaptureOpenshell(["provider", "get", name], { ignoreError: true });
+  return Boolean(output && !output.includes("not found"));
+}
+
 function verifyInferenceRoute(_provider, _model) {
   const output = runCaptureOpenshell(["inference", "get"], { ignoreError: true });
   if (!output || /Gateway inference:\s*[\r\n]+\s*Not configured/i.test(output)) {
@@ -1901,6 +1906,15 @@ async function createSandbox(gpu, model, provider, preferredInferenceApi = null,
   // sandbox namespace can resolve hostnames (fixes #626).
   console.log("  Setting up sandbox DNS proxy...");
   run(`bash "${path.join(SCRIPTS, "setup-dns-proxy.sh")}" ${GATEWAY_NAME} "${sandboxName}" 2>&1 || true`, { ignoreError: true });
+
+  // Verify messaging providers are attached to the sandbox
+  for (const p of messagingProviders) {
+    if (!verifyProviderExists(p)) {
+      console.error(`  ⚠ Messaging provider '${p}' was not found in the gateway.`);
+      console.error(`    The credential may not be available inside the sandbox.`);
+      console.error(`    To fix: openshell provider create --name ${p} --type generic --credential <KEY>`);
+    }
+  }
 
   console.log(`  ✓ Sandbox '${sandboxName}' created`);
   return sandboxName;
