@@ -1637,7 +1637,9 @@ async function startGatewayWithOptions(_gpu, { exitOnFailure = true } = {}) {
         }
       }
 
-      destroyGateway();
+      if (exitOnFailure) {
+        destroyGateway();
+      }
       throw new Error("Gateway failed to start");
     }, {
       retries,
