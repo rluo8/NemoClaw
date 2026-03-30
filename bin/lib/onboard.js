@@ -1778,26 +1778,45 @@ async function createSandbox(gpu, model, provider, preferredInferenceApi = null,
   ];
   // --gpu is intentionally omitted. See comment in startGateway().
 
-  console.log(`  Creating sandbox '${sandboxName}' (this takes a few minutes on first run)...`);
-  const chatUiUrl = process.env.CHAT_UI_URL || "http://127.0.0.1:18789";
-  patchStagedDockerfile(stagedDockerfile, model, chatUiUrl, String(Date.now()), provider, preferredInferenceApi);
-  // Only pass non-sensitive env vars to the sandbox. NVIDIA_API_KEY is NOT
-  // needed inside the sandbox — inference is proxied through the OpenShell
-  // gateway which injects the stored credential server-side. The gateway
-  // also strips any Authorization headers sent by the sandbox client.
-  // See: crates/openshell-sandbox/src/proxy.rs (header stripping),
-  //      crates/openshell-router/src/backend.rs (server-side auth injection).
-  const envArgs = [formatEnvAssignment("CHAT_UI_URL", chatUiUrl)];
-  const sandboxEnv = { ...process.env };
-  delete sandboxEnv.NVIDIA_API_KEY;
+  // Create OpenShell providers for messaging credentials so they flow through
+  // the provider/placeholder system instead of raw env vars. The L7 proxy
+  // rewrites Authorization headers (Bearer/Bot) with real secrets at egress.
+  // Telegram provider is created for credential storage but the host-side bridge
+  // still reads from host env — Telegram uses URL-path auth (/bot{TOKEN}/) which
+  // the proxy can't rewrite yet.
+  const messagingProviders = [];
   const discordToken = getCredential("DISCORD_BOT_TOKEN") || process.env.DISCORD_BOT_TOKEN;
   if (discordToken) {
-    sandboxEnv.DISCORD_BOT_TOKEN = discordToken;
+    upsertProvider("discord-bridge", "generic", "DISCORD_BOT_TOKEN", null, { DISCORD_BOT_TOKEN: discordToken });
+    messagingProviders.push("discord-bridge");
   }
   const slackToken = getCredential("SLACK_BOT_TOKEN") || process.env.SLACK_BOT_TOKEN;
   if (slackToken) {
-    sandboxEnv.SLACK_BOT_TOKEN = slackToken;
+    upsertProvider("slack-bridge", "generic", "SLACK_BOT_TOKEN", null, { SLACK_BOT_TOKEN: slackToken });
+    messagingProviders.push("slack-bridge");
   }
+  const telegramToken = getCredential("TELEGRAM_BOT_TOKEN") || process.env.TELEGRAM_BOT_TOKEN;
+  if (telegramToken) {
+    upsertProvider("telegram-bridge", "generic", "TELEGRAM_BOT_TOKEN", null, { TELEGRAM_BOT_TOKEN: telegramToken });
+    messagingProviders.push("telegram-bridge");
+  }
+  for (const p of messagingProviders) {
+    createArgs.push("--provider", p);
+  }
+
+  console.log(`  Creating sandbox '${sandboxName}' (this takes a few minutes on first run)...`);
+  const chatUiUrl = process.env.CHAT_UI_URL || "http://127.0.0.1:18789";
+  patchStagedDockerfile(stagedDockerfile, model, chatUiUrl, String(Date.now()), provider, preferredInferenceApi);
+  // Only pass non-sensitive env vars to the sandbox. Credentials flow through
+  // OpenShell providers — the gateway injects them as placeholders and the L7
+  // proxy rewrites Authorization headers with real secrets at egress.
+  // See: crates/openshell-sandbox/src/secrets.rs (placeholder rewriting),
+  //      crates/openshell-router/src/backend.rs (inference auth injection).
+  const envArgs = [formatEnvAssignment("CHAT_UI_URL", chatUiUrl)];
+  const sandboxEnv = { ...process.env };
+  delete sandboxEnv.NVIDIA_API_KEY;
+  delete sandboxEnv.DISCORD_BOT_TOKEN;
+  delete sandboxEnv.SLACK_BOT_TOKEN;
 
   // Run without piping through awk — the pipe masked non-zero exit codes
   // from openshell because bash returns the status of the last pipeline
