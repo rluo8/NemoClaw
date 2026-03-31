@@ -78,7 +78,7 @@ function sshWithSecrets(cmd, { timeout = 600_000 } = {}) {
   ).trim();
 }
 
-function waitForSsh(maxAttempts = 60, intervalMs = 5_000) {
+function waitForSsh(maxAttempts = 180, intervalMs = 5_000) {
   for (let i = 1; i <= maxAttempts; i++) {
     try {
       ssh("echo ok", { timeout: 10_000 });
