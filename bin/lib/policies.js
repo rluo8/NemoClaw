@@ -63,6 +63,7 @@ function getPresetEndpoints(content) {
  * `preset:` metadata header.
  */
 function extractPresetEntries(presetContent) {
+  if (!presetContent) return null;
   const npMatch = presetContent.match(/^network_policies:\n([\s\S]*)$/m);
   if (!npMatch) return null;
   return npMatch[1].trimEnd();
@@ -156,7 +157,7 @@ function applyPreset(sandboxName, presetName) {
   if (!sandboxName || sandboxName.length > 63 || !isRfc1123Label) {
     throw new Error(
       `Invalid or truncated sandbox name: '${sandboxName}'. ` +
-      `Names must be 1-63 chars, lowercase alphanumeric, with optional internal hyphens.`
+        `Names must be 1-63 chars, lowercase alphanumeric, with optional internal hyphens.`,
     );
   }
 
@@ -175,11 +176,10 @@ function applyPreset(sandboxName, presetName) {
   // Get current policy YAML from sandbox
   let rawPolicy = "";
   try {
-    rawPolicy = runCapture(
-      buildPolicyGetCommand(sandboxName),
-      { ignoreError: true }
-    );
-  } catch { /* ignored */ }
+    rawPolicy = runCapture(buildPolicyGetCommand(sandboxName), { ignoreError: true });
+  } catch {
+    /* ignored */
+  }
 
   const currentPolicy = parseCurrentPolicy(rawPolicy);
   const merged = mergePresetIntoPolicy(currentPolicy, presetEntries);
@@ -193,8 +193,16 @@ function applyPreset(sandboxName, presetName) {
 
     console.log(`  Applied preset: ${presetName}`);
   } finally {
-    try { fs.unlinkSync(tmpFile); } catch { /* ignored */ }
-    try { fs.rmdirSync(tmpDir); } catch { /* ignored */ }
+    try {
+      fs.unlinkSync(tmpFile);
+    } catch {
+      /* ignored */
+    }
+    try {
+      fs.rmdirSync(tmpDir);
+    } catch {
+      /* ignored */
+    }
   }
 
   const sandbox = registry.getSandbox(sandboxName);
