@@ -846,7 +846,7 @@ describe("onboard helpers", () => {
         "text, image",
         'text"\nRUN rm -rf /',
       ];
-      for (const value of rejectCases) {
+      for (const [index, value] of rejectCases.entries()) {
         fs.writeFileSync(dockerfilePath, baseDockerfile);
         if (value === undefined) {
           delete process.env.NEMOCLAW_INFERENCE_INPUTS;
@@ -857,7 +857,7 @@ describe("onboard helpers", () => {
           dockerfilePath,
           "gpt-5.4",
           "http://127.0.0.1:18789",
-          `build-inputs-reject-${String(value)}`,
+          `build-inputs-reject-${index}`,
           "openai-api",
         );
         assert.match(
