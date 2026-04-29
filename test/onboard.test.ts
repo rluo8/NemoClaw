@@ -91,6 +91,10 @@ type OnboardTestInternals = {
     flavor: "openai" | "anthropic",
   ) => string;
   parsePolicyPresetEnv: (value: string | null) => string[];
+  shouldCarryPreviousPolicies: (
+    previousPolicies: string[] | null | undefined,
+    options?: { nonInteractive?: boolean; envPolicyPresetsRaw?: string },
+  ) => boolean;
   patchStagedDockerfile: ShimFn<void>;
   pullAndResolveBaseImageDigest: () => { digest: string; ref: string } | null;
   SANDBOX_BASE_IMAGE: string;
@@ -164,6 +168,7 @@ const {
   isLoopbackHostname,
   normalizeProviderBaseUrl,
   parsePolicyPresetEnv,
+  shouldCarryPreviousPolicies,
   patchStagedDockerfile,
   pullAndResolveBaseImageDigest,
   SANDBOX_BASE_IMAGE,
@@ -279,6 +284,26 @@ describe("onboard helpers", () => {
     expect(getSuggestedPolicyPresets({ provider: "openai-api" })).not.toContain("local-inference");
     expect(getSuggestedPolicyPresets({ provider: null })).not.toContain("local-inference");
     expect(getSuggestedPolicyPresets({})).not.toContain("local-inference");
+  });
+
+  describe("shouldCarryPreviousPolicies (#2675)", () => {
+    it("drops previous policies when NEMOCLAW_POLICY_PRESETS overrides on recreate", () => {
+      expect(
+        shouldCarryPreviousPolicies(["npm"], {
+          nonInteractive: true,
+          envPolicyPresetsRaw: "pypi",
+        }),
+      ).toBe(false);
+    });
+
+    it("ignores env var in interactive mode (previous list still wins)", () => {
+      expect(
+        shouldCarryPreviousPolicies(["npm"], {
+          nonInteractive: false,
+          envPolicyPresetsRaw: "pypi",
+        }),
+      ).toBe(true);
+    });
   });
 
   describe("computeSetupPresetSuggestions", () => {

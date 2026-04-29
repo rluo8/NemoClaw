@@ -3685,11 +3685,20 @@ async function createSandbox(
 
     const previousEntry: SandboxEntry | null = registry.getSandbox(sandboxName);
     const previousPolicies = previousEntry?.policies ?? null;
-    if (previousPolicies && previousPolicies.length > 0) {
+    if (shouldCarryPreviousPolicies(previousPolicies)) {
       onboardSession.updateSession((current: Session) => {
         current.policyPresets = previousPolicies;
         return current;
       });
+    } else if (
+      Array.isArray(previousPolicies) &&
+      previousPolicies.length > 0 &&
+      isNonInteractive() &&
+      (process.env.NEMOCLAW_POLICY_PRESETS || "").trim().length > 0
+    ) {
+      note(
+        `  [non-interactive] NEMOCLAW_POLICY_PRESETS overrides previous presets on recreate (was: ${previousPolicies.join(", ")}).`,
+      );
     }
 
     note(`  Deleting and recreating sandbox '${sandboxName}'...`);
@@ -5741,6 +5750,20 @@ function arePolicyPresetsApplied(sandboxName: string, selectedPresets: string[] 
   return selectedPresets.every((preset) => applied.has(preset));
 }
 
+// Skip carrying previous policies forward on --recreate-sandbox when the user
+// explicitly set NEMOCLAW_POLICY_PRESETS for the new run (#2675).
+function shouldCarryPreviousPolicies(
+  previousPolicies: string[] | null | undefined,
+  options: { nonInteractive?: boolean; envPolicyPresetsRaw?: string } = {},
+): boolean {
+  if (!Array.isArray(previousPolicies) || previousPolicies.length === 0) return false;
+  const nonInteractive = options.nonInteractive ?? isNonInteractive();
+  const envRaw = (
+    options.envPolicyPresetsRaw ?? process.env.NEMOCLAW_POLICY_PRESETS ?? ""
+  ).trim();
+  return !(nonInteractive && envRaw.length > 0);
+}
+
 /**
  * Prompt the user to select a policy tier (restricted / balanced / open).
  * Uses the same radio-style TUI as presetsCheckboxSelector (single-select).
@@ -7738,6 +7761,7 @@ module.exports = {
   isNonInteractive,
   isOpenclawReady,
   arePolicyPresetsApplied,
+  shouldCarryPreviousPolicies,
   getSuggestedPolicyPresets,
   computeSetupPresetSuggestions,
   LOCAL_INFERENCE_PROVIDERS,
