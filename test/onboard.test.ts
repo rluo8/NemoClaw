@@ -1154,7 +1154,7 @@ describe("onboard helpers", () => {
     expect(agentSupportsWebSearch(loadAgent("hermes"))).toBe(false);
   });
 
-  it("#2433: agentSupportsWebSearch honors the effective custom Dockerfile", () => {
+  it("#2433: agentSupportsWebSearch honors the effective custom Dockerfile for Brave-capable agents", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-web-search-custom-"));
     const withoutArg = path.join(tmpDir, "Dockerfile.no-web");
     const withArg = path.join(tmpDir, "Dockerfile.web");
@@ -1163,7 +1163,7 @@ describe("onboard helpers", () => {
     fs.writeFileSync(withArg, "FROM scratch\n  ARG NEMOCLAW_WEB_SEARCH_ENABLED=0\n");
     try {
       expect(agentSupportsWebSearch(loadAgent("openclaw"), withoutArg)).toBe(false);
-      expect(agentSupportsWebSearch(loadAgent("hermes"), withArg)).toBe(true);
+      expect(agentSupportsWebSearch(loadAgent("hermes"), withArg)).toBe(false);
       expect(agentSupportsWebSearch(loadAgent("openclaw"), missing)).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
