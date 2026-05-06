@@ -30,8 +30,8 @@ export type RunCaptureFn = (cmd: string | string[], opts?: { ignoreError?: boole
 // Hosts that the WSL-side onboard CLI tries when probing Ollama. Native Linux
 // and macOS only ever reach Ollama on the local loopback. WSL with Docker
 // Desktop can also reach a Windows-host Ollama through the docker-desktop
-// integration's `host.docker.internal` alias when Ollama is bound to a
-// non-loopback interface (typically OLLAMA_HOST=0.0.0.0).
+// integration's `host.docker.internal` alias when that host explicitly exposes
+// Ollama outside Windows loopback.
 export const OLLAMA_LOCALHOST = "127.0.0.1";
 export const OLLAMA_HOST_DOCKER_INTERNAL = "host.docker.internal";
 

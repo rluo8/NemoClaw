@@ -73,9 +73,10 @@ If both WSL and Windows-host Ollama are running, pick the intended menu entry du
 ### Authenticated Reverse Proxy
 
 On non-WSL hosts, NemoClaw keeps Ollama bound to `127.0.0.1:11434` and starts a token-gated reverse proxy on `0.0.0.0:11435`.
+The native install/start paths also reset NemoClaw-managed systemd launches to the loopback binding.
 Containers and other hosts on the local network reach Ollama only through the
 proxy, which validates a Bearer token before forwarding requests.
-Ollama itself is never exposed without authentication.
+On that native path, NemoClaw never exposes Ollama without authentication.
 
 WSL Ollama paths do not use this proxy.
 Windows-host Ollama uses the Windows daemon through `host.docker.internal`.
