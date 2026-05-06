@@ -770,6 +770,281 @@ function getBlueprintMaxOpenshellVersion(rootDir = ROOT): string | null {
   return getBlueprintVersionField("max_openshell_version", rootDir);
 }
 
+/**
+ * Load a named inference profile and router config from blueprint.yaml.
+ * Returns null if the blueprint or profile is missing.
+ */
+type BlueprintRouterConfig = {
+  enabled?: boolean;
+  port?: number;
+  pool_config_path?: string;
+  credential_env?: string;
+};
+
+type BlueprintInferenceProfile = {
+  provider_name?: string;
+  endpoint?: string;
+  model: string;
+  credential_env?: string;
+  credential_default?: string;
+  router: BlueprintRouterConfig;
+};
+
+function loadBlueprintProfile(
+  profileName: string,
+  rootDir: string = ROOT,
+): BlueprintInferenceProfile | null {
+  try {
+    const YAML = require("yaml");
+    const blueprintPath = path.join(rootDir, "nemoclaw-blueprint", "blueprint.yaml");
+    if (!fs.existsSync(blueprintPath)) return null;
+    const raw = fs.readFileSync(blueprintPath, "utf8");
+    const parsed = YAML.parse(raw);
+    const profile = parsed?.components?.inference?.profiles?.[profileName];
+    if (!profile) return null;
+    const router = { ...(parsed?.components?.router || {}) };
+    if (typeof profile.credential_env === "string" && profile.credential_env.trim().length > 0) {
+      router.credential_env = profile.credential_env;
+    }
+    return { ...profile, router } as BlueprintInferenceProfile;
+  } catch {
+    return null;
+  }
+}
+
+const ROUTER_HEALTH_RETRIES = 15;
+const ROUTER_HEALTH_INTERVAL_MS = 2000;
+const ROUTER_HEALTH_TIMEOUT_MS = 3000;
+
+async function isRouterHealthy(port: number, timeoutMs = ROUTER_HEALTH_TIMEOUT_MS): Promise<boolean> {
+  const http = require("http");
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (healthy: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolve(healthy);
+    };
+    const request = http
+      .get(`http://127.0.0.1:${port}/health`, (res: import("node:http").IncomingMessage) => {
+        res.resume();
+        settle((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300);
+      })
+      .on("error", () => settle(false));
+    request.setTimeout(timeoutMs, () => {
+      request.destroy();
+      settle(false);
+    });
+  });
+}
+
+function isProcessRunning(pid: number | null | undefined): boolean {
+  if (!Number.isInteger(pid) || Number(pid) <= 0) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function stopModelRouterProcess(pid: number, port: number): Promise<void> {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (!isProcessRunning(pid) && !(await isRouterHealthy(port, 1000))) return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // already stopped
+  }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    if (!isProcessRunning(pid) && !(await isRouterHealthy(port, 1000))) return;
+  }
+}
+
+/**
+ * Start the model-router proxy and wait for it to become healthy.
+ * Follows the same pattern as Ollama startup (spawn detached, poll health).
+ * Returns the PID of the child process.
+ */
+async function startModelRouter(routerCfg: BlueprintRouterConfig): Promise<number> {
+  const port = routerCfg.port || 4000;
+  const blueprintDir = path.join(ROOT, "nemoclaw-blueprint");
+  const poolConfigPath = path.join(
+    blueprintDir,
+    routerCfg.pool_config_path || "router/pool-config.yaml",
+  );
+  const stateDir = path.join(os.homedir(), ".nemoclaw", "state");
+  const litellmConfigPath = path.join(stateDir, "litellm-proxy.yaml");
+
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  const proxyConfigResult = spawnSync(
+    "model-router",
+    ["proxy-config", "--config", poolConfigPath, "--output", litellmConfigPath],
+    { encoding: "utf8", timeout: 30_000, cwd: blueprintDir },
+  );
+  if (proxyConfigResult.status !== 0) {
+    throw new Error(
+      `model-router proxy-config failed: ${proxyConfigResult.stderr || proxyConfigResult.error || "unknown error"}`,
+    );
+  }
+
+  const { buildSubprocessEnv } = require("./subprocess-env");
+  const credEnvVars: Record<string, string> = {};
+  const credName = routerCfg.credential_env || "NVIDIA_API_KEY";
+  const routedCredential = resolveProviderCredential(credName);
+  const openAiCredential = resolveProviderCredential("OPENAI_API_KEY");
+  if (routedCredential) {
+    credEnvVars[credName] = routedCredential;
+    if (!openAiCredential) credEnvVars.OPENAI_API_KEY = routedCredential;
+  }
+  if (openAiCredential) credEnvVars.OPENAI_API_KEY = openAiCredential;
+  const _providerKey = (process.env.NEMOCLAW_PROVIDER_KEY || "").trim();
+  if (_providerKey) {
+    if (!credEnvVars[credName]) credEnvVars[credName] = _providerKey;
+    if (!credEnvVars.OPENAI_API_KEY) credEnvVars.OPENAI_API_KEY = _providerKey;
+  }
+
+  if (await isRouterHealthy(port)) {
+    throw new Error(
+      `Port ${port} already has a healthy router endpoint; refusing to start a second router.`,
+    );
+  }
+
+  const child = spawn(
+    "model-router",
+    [
+      "proxy",
+      "--litellm-config", litellmConfigPath,
+      "--router-config", poolConfigPath,
+      "--host", "0.0.0.0",
+      "--port", String(port),
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+      cwd: blueprintDir,
+      env: buildSubprocessEnv(credEnvVars),
+    },
+  );
+  let childExited = false;
+  let childExitDetail = "";
+  child.once("error", (err: Error) => {
+    childExited = true;
+    childExitDetail = `child failed to start: ${err.message}`;
+  });
+  child.once("exit", (code: number | null, signal: string | null) => {
+    childExited = true;
+    if (!childExitDetail) {
+      childExitDetail = `child exited with code ${code ?? "null"}${signal ? ` signal ${signal}` : ""}`;
+    }
+  });
+  child.unref();
+
+  const pid = child.pid;
+  if (!pid) {
+    throw new Error(
+      "Failed to start model-router proxy: no PID returned" +
+        (childExitDetail ? ` (${childExitDetail})` : ""),
+    );
+  }
+
+  for (let attempt = 0; attempt < ROUTER_HEALTH_RETRIES; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, ROUTER_HEALTH_INTERVAL_MS));
+    if (childExited) break;
+    const healthy = await isRouterHealthy(port);
+    let processAlive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      processAlive = false;
+    }
+    if (healthy && processAlive) return pid;
+    if (!processAlive) {
+      childExited = true;
+      if (!childExitDetail) childExitDetail = "child process is no longer running";
+      break;
+    }
+  }
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // already dead
+  }
+  throw new Error(
+    `Model router failed to become healthy on port ${port} after ${ROUTER_HEALTH_RETRIES} attempts` +
+      (childExitDetail ? ` (${childExitDetail})` : ""),
+  );
+}
+
+function getRoutedProfile(): BlueprintInferenceProfile {
+  const bp = loadBlueprintProfile("routed");
+  if (!bp || bp.router?.enabled !== true) {
+    throw new Error("Router is not enabled in nemoclaw-blueprint/blueprint.yaml.");
+  }
+  return bp;
+}
+
+function isRoutedInferenceProvider(provider: string | null | undefined): boolean {
+  if (!provider) return false;
+  if (provider === "nvidia-router") return true;
+  const bp = loadBlueprintProfile("routed");
+  return Boolean(bp?.provider_name && provider === bp.provider_name);
+}
+
+async function reconcileModelRouter(): Promise<void> {
+  const bp = getRoutedProfile();
+  const routerPort = bp.router.port || 4000;
+  const routerCredentialEnv = bp.router.credential_env || bp.credential_env || "NVIDIA_API_KEY";
+  const routerCredential =
+    hydrateCredentialEnv(routerCredentialEnv) ||
+    normalizeCredentialValue(bp.credential_default || "");
+  if (!routerCredential) {
+    throw new Error(`${routerCredentialEnv} is required to start Model Router.`);
+  }
+  saveCredential(routerCredentialEnv, routerCredential);
+  const routerCredentialHash = hashCredential(routerCredential);
+  const session = onboardSession.loadSession();
+  const recordedPid = session?.routerPid ?? null;
+  const recordedCredentialHash = session?.routerCredentialHash ?? null;
+
+  if (await isRouterHealthy(routerPort)) {
+    if (
+      routerCredentialHash &&
+      recordedCredentialHash === routerCredentialHash &&
+      isProcessRunning(recordedPid)
+    ) {
+      console.log(`  ✓ Model router is already healthy on port ${routerPort}`);
+      return;
+    }
+    if (isProcessRunning(recordedPid)) {
+      console.log("  Restarting model router with updated credentials...");
+      await stopModelRouterProcess(requireValue(recordedPid, "Expected recorded router PID"), routerPort);
+    } else {
+      throw new Error(
+        `Port ${routerPort} already has a healthy router endpoint, but its credential state is unknown. Stop the existing model-router process and rerun onboarding.`,
+      );
+    }
+  }
+
+  console.log("  Starting model router...");
+  const routerPid = await startModelRouter(bp.router);
+  console.log(`  ✓ Model router started (PID ${routerPid}) on port ${routerPort}`);
+  onboardSession.updateSession((current: Session) => {
+    current.routerPid = routerPid;
+    current.routerCredentialHash = routerCredentialHash;
+    return current;
+  });
+}
+
 // ── Base image digest resolution ────────────────────────────────
 // Pulls the sandbox-base image from GHCR and inspects it to get the
 // actual repo digest. This avoids the registry mismatch that broke
@@ -5184,6 +5459,7 @@ function providerNameToOptionKey(
   opts: { hasNimContainer?: boolean } = {},
 ): string | null {
   if (!name) return null;
+  if (name === "nvidia-router") return "routed";
   if (name === "ollama-local") return "ollama";
   // Local NIM and standalone vLLM both persist as provider="vllm-local". NIM
   // is positively identified by a nimContainer record; the absence of one in
@@ -5593,6 +5869,12 @@ async function setupNim(
         options.push({ key: "install-ollama", label: "Install Ollama (Linux)" });
       }
     }
+  }
+
+  // Model Router: complexity-based routing via blueprint config.
+  const blueprintRouterCfg = loadBlueprintProfile("routed");
+  if (blueprintRouterCfg && blueprintRouterCfg.router?.enabled === true) {
+    options.push({ key: "routed", label: "Model Router (complexity-based routing)" });
   }
 
   function checkOllamaPortsOrWarn(): boolean {
@@ -6489,6 +6771,49 @@ async function setupNim(
         }
         preferredInferenceApi = "openai-completions";
         break;
+      } else if (selected.key === "routed") {
+        const bp = loadBlueprintProfile("routed");
+        if (!bp || bp.router?.enabled !== true) {
+          console.error("  Router is not enabled in nemoclaw-blueprint/blueprint.yaml.");
+          if (isNonInteractive()) process.exit(1);
+          continue selectionLoop;
+        }
+        const routerCredentialEnv = bp.router?.credential_env || bp.credential_env || "OPENAI_API_KEY";
+        credentialEnv = routerCredentialEnv;
+        const routedCredential =
+          hydrateCredentialEnv(routerCredentialEnv) ||
+          normalizeCredentialValue(bp.credential_default || "");
+        if (routedCredential) {
+          saveCredential(routerCredentialEnv, routedCredential);
+        }
+        const _providerKeyHint = (process.env.NEMOCLAW_PROVIDER_KEY || "").trim();
+        if (_providerKeyHint && !resolveProviderCredential(routerCredentialEnv)) {
+          saveCredential(routerCredentialEnv, _providerKeyHint);
+        }
+        if (isNonInteractive()) {
+          if (!resolveProviderCredential(routerCredentialEnv)) {
+            console.error(
+              `  ${routerCredentialEnv} (or NEMOCLAW_PROVIDER_KEY) is required for Model Router in non-interactive mode.`,
+            );
+            process.exit(1);
+          }
+        } else {
+          if (!resolveProviderCredential(routerCredentialEnv)) {
+            await ensureNamedCredential(routerCredentialEnv, "Model Router API key", null);
+          }
+        }
+        provider = bp.provider_name || "nvidia-router";
+        model = bp.model;
+        const { HOST_GATEWAY_URL } = require("./local-inference");
+        const routerEndpointUrl = bp.endpoint || "";
+        endpointUrl = routerEndpointUrl;
+        if (routerEndpointUrl.match(/localhost|127\.0\.0\.1/)) {
+          const u = new URL(routerEndpointUrl);
+          endpointUrl = `${HOST_GATEWAY_URL}:${u.port}${u.pathname}`;
+        }
+        preferredInferenceApi = "openai-completions";
+        console.log(`  ✓ Using Model Router: ${provider} / ${model}`);
+        break;
       }
     }
   }
@@ -6737,6 +7062,42 @@ async function setupInference(
     // Do not mutate ~/.nemoclaw/credentials.json here: local Ollama now uses
     // OLLAMA_PROXY_CREDENTIAL_ENV, so any saved OPENAI_API_KEY remains available
     // to unrelated OpenAI-backed sandboxes.
+  } else if (isRoutedInferenceProvider(provider)) {
+    // Blueprint profile provider (e.g., nvidia-router for the routed profile).
+    // Same pattern as vllm-local: upsert the provider and set the inference route.
+    try {
+      await reconcileModelRouter();
+    } catch (err) {
+      console.error(`  ✗ Failed to start model router: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+    const resolvedCredentialEnv = credentialEnv || "NVIDIA_API_KEY";
+    const credentialValue = hydrateCredentialEnv(resolvedCredentialEnv);
+    const env = credentialValue ? { [resolvedCredentialEnv]: credentialValue } : {};
+    const providerResult = upsertProvider(
+      provider,
+      "openai",
+      resolvedCredentialEnv,
+      endpointUrl,
+      env,
+    );
+    if (!providerResult.ok) {
+      console.error(`  ${providerResult.message}`);
+      process.exit(providerResult.status || 1);
+    }
+    const inferenceArgs = [
+      "inference",
+      "set",
+      "--no-verify",
+      "--provider",
+      provider,
+      "--model",
+      model,
+    ];
+    runOpenshell(inferenceArgs);
+  } else {
+    console.error(`  Unsupported provider configuration: ${provider}`);
+    process.exit(1);
   }
 
   verifyInferenceRoute(provider, model);
@@ -9156,6 +9517,16 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
       const resumeInference =
         !forceProviderSelection && resume && isInferenceRouteReady(provider, model);
       if (resumeInference) {
+        if (isRoutedInferenceProvider(provider)) {
+          try {
+            await reconcileModelRouter();
+          } catch (err) {
+            console.error(
+              `  ✗ Failed to reconcile model router: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            process.exit(1);
+          }
+        }
         skippedStepMessage("inference", `${provider} / ${model}`);
         if (nimContainer && sandboxName) {
           registry.updateSandbox(sandboxName, { nimContainer });

@@ -119,6 +119,8 @@ function getProviderLabel(provider) {
   switch (provider) {
     case "nvidia-nim":
       return "NVIDIA Endpoints";
+    case "nvidia-router":
+      return "Model Router";
     case "vllm-local":
       return "Local vLLM";
     case "ollama-local":
@@ -142,6 +144,8 @@ function getEffectiveProviderName(providerKey) {
       return "ollama-local";
     case "vllm":
       return "vllm-local";
+    case "routed":
+      return "nvidia-router";
     default:
       return providerKey;
   }
@@ -169,6 +173,7 @@ function getNonInteractiveProvider() {
     "custom",
     "nim-local",
     "vllm",
+    "routed",
     "install-vllm",
     "install-ollama",
     "install-windows-ollama",
@@ -177,7 +182,7 @@ function getNonInteractiveProvider() {
   if (!validProviders.has(normalized)) {
     console.error(`  Unsupported NEMOCLAW_PROVIDER: ${providerKey}`);
     console.error(
-      "  Valid values: build, openai, anthropic, anthropicCompatible, gemini, ollama, custom, nim-local, vllm, install-vllm, install-ollama, install-windows-ollama, start-windows-ollama",
+      "  Valid values: build, openai, anthropic, anthropicCompatible, gemini, ollama, custom, nim-local, vllm, routed, install-vllm, install-ollama, install-windows-ollama, start-windows-ollama",
     );
     process.exit(1);
   }
@@ -339,6 +344,10 @@ function getSandboxInferenceConfig(
       inferenceCompat = {
         supportsStore: false,
       };
+      break;
+    case "nvidia-router":
+      providerKey = "inference";
+      primaryModelRef = `inference/${model}`;
       break;
     case "nvidia-prod":
     case "nvidia-nim":

@@ -106,6 +106,7 @@ type OnboardTestInternals = {
     value: string | null | undefined,
     flavor: "openai" | "anthropic",
   ) => string;
+  providerNameToOptionKey: (name?: string | null) => string | null;
   parsePolicyPresetEnv: (value: string | null) => string[];
   patchStagedDockerfile: ShimFn<void>;
   pullAndResolveBaseImageDigest: () => { digest: string; ref: string } | null;
@@ -148,6 +149,8 @@ function isOnboardTestInternals(
     typeof value.agentSupportsWebSearch === "function" &&
     typeof value.configureWebSearch === "function" &&
     typeof value.formatSandboxBuildEstimateNote === "function" &&
+    Object.prototype.hasOwnProperty.call(value, "providerNameToOptionKey") &&
+    typeof value.providerNameToOptionKey === "function" &&
     typeof value.shouldRunCompatibleEndpointSandboxSmoke === "function" &&
     typeof value.writeSandboxConfigSyncFile === "function"
   );
@@ -199,6 +202,7 @@ const {
   configureWebSearch,
   isLoopbackHostname,
   normalizeProviderBaseUrl,
+  providerNameToOptionKey,
   parsePolicyPresetEnv,
   patchStagedDockerfile,
   pullAndResolveBaseImageDigest,
@@ -827,6 +831,20 @@ describe("onboard helpers", () => {
         inferenceCompat: null,
       },
     );
+  });
+
+  it("maps Model Router sandboxes through managed inference.local", () => {
+    assert.deepEqual(getSandboxInferenceConfig("nvidia-routed", "nvidia-router"), {
+      providerKey: "inference",
+      primaryModelRef: "inference/nvidia-routed",
+      inferenceBaseUrl: "https://inference.local/v1",
+      inferenceApi: "openai-completions",
+      inferenceCompat: null,
+    });
+  });
+
+  it("maps persisted Model Router provider back to the routed provider option", () => {
+    assert.equal(providerNameToOptionKey("nvidia-router"), "routed");
   });
 
   it("leaves Kimi K2.6 compat to the model-specific setup registry", () => {
@@ -2404,6 +2422,145 @@ const { setupInference } = require(${onboardPath});
     assert.match(commands[2].command, /provider update/);
     assert.match(commands[3].command, /inference set/);
     assert.equal(payload.nvidiaApiKey, "nvapi-secret-value");
+  });
+
+  it("configures Model Router as a host provider while sandboxes keep inference.local", () => {
+    const repoRoot = path.join(import.meta.dirname, "..");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-router-inference-"));
+    const fakeBin = path.join(tmpDir, "bin");
+    const scriptPath = path.join(tmpDir, "setup-router-check.js");
+    const onboardPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "onboard.js"));
+    const runnerPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "runner.js"));
+    const registryPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "state", "registry.js"));
+
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.writeFileSync(path.join(fakeBin, "openshell"), "#!/usr/bin/env bash\nexit 0\n", {
+      mode: 0o755,
+    });
+    fs.writeFileSync(
+      path.join(fakeBin, "model-router"),
+      [
+        "#!/usr/bin/env node",
+        'const fs = require("fs");',
+        'const http = require("http");',
+        'const path = require("path");',
+        "const args = process.argv.slice(2);",
+        'if (args[0] === "proxy-config") {',
+        '  const output = args[args.indexOf("--output") + 1];',
+        "  fs.mkdirSync(path.dirname(output), { recursive: true });",
+        '  fs.writeFileSync(output, "model_list: []\\n");',
+        "  process.exit(0);",
+        "}",
+        'if (args[0] === "proxy") {',
+        '  const port = Number(args[args.indexOf("--port") + 1] || "4000");',
+        "  const server = http.createServer((req, res) => {",
+        '    if (req.url === "/health") { res.statusCode = 200; res.end("ok"); return; }',
+        "    res.statusCode = 404;",
+        "    res.end();",
+        "  });",
+        '  server.listen(port, "127.0.0.1");',
+        "  setTimeout(() => process.exit(0), 10000);",
+        "} else {",
+        "  process.exit(1);",
+        "}",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const script = String.raw`
+const runner = require(${runnerPath});
+const _n = (c) => (Array.isArray(c) ? c.join(" ") : String(c)).replace(/'/g, "");
+const registry = require(${registryPath});
+
+const commands = [];
+runner.run = (command, opts = {}) => {
+  const cmd = _n(command);
+  commands.push({ command: cmd, env: opts.env || null });
+  if (cmd.includes("provider get")) return { status: 1, stdout: "", stderr: "" };
+  return { status: 0, stdout: "", stderr: "" };
+};
+runner.runCapture = (command) => {
+  const cmd = _n(command);
+  if (cmd.includes("inference") && cmd.includes("get")) {
+    return [
+      "Gateway inference:",
+      "",
+      "  Route: inference.local",
+      "  Provider: nvidia-router",
+      "  Model: nvidia-routed",
+      "  Version: 1",
+    ].join("\\n");
+  }
+  return "";
+};
+registry.updateSandbox = () => true;
+
+process.env.NVIDIA_API_KEY = "nvapi-router-secret";
+
+const { setupInference, getSandboxInferenceConfig } = require(${onboardPath});
+
+(async () => {
+  await setupInference(
+    "router-box",
+    "nvidia-routed",
+    "nvidia-router",
+    "http://host.openshell.internal:4000/v1",
+    "NVIDIA_API_KEY",
+  );
+  console.log(JSON.stringify({
+    commands,
+    sandboxConfig: getSandboxInferenceConfig("nvidia-routed", "nvidia-router", "openai-completions"),
+  }));
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+`;
+    fs.writeFileSync(scriptPath, script);
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: tmpDir,
+        PATH: `${fakeBin}:${process.env.PATH || ""}`,
+      },
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const payload = parseStdoutJson<{
+      commands: CommandEntry[];
+      sandboxConfig: SandboxInferenceConfig;
+    }>(result.stdout);
+    const providerCommand = payload.commands.find((entry) =>
+      /provider create/.test(entry.command),
+    );
+    assert.ok(providerCommand, JSON.stringify(payload.commands));
+    assert.match(providerCommand.command, /--name nvidia-router/);
+    assert.match(providerCommand.command, /--credential NVIDIA_API_KEY/);
+    assert.match(
+      providerCommand.command,
+      /OPENAI_BASE_URL=http:\/\/host\.openshell\.internal:4000\/v1/,
+    );
+    assert.doesNotMatch(providerCommand.command, /nvapi-router-secret/);
+    assert.equal(providerCommand.env?.NVIDIA_API_KEY, "nvapi-router-secret");
+
+    const inferenceCommand = payload.commands.find((entry) =>
+      /inference set/.test(entry.command),
+    );
+    assert.ok(inferenceCommand, JSON.stringify(payload.commands));
+    assert.match(inferenceCommand.command, /--provider nvidia-router/);
+    assert.match(inferenceCommand.command, /--model nvidia-routed/);
+
+    assert.deepEqual(payload.sandboxConfig, {
+      providerKey: "inference",
+      primaryModelRef: "inference/nvidia-routed",
+      inferenceBaseUrl: "https://inference.local/v1",
+      inferenceApi: "openai-completions",
+      inferenceCompat: null,
+    });
   });
 
   it("does not delete saved OpenAI credentials when configuring local vLLM", () => {
