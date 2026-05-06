@@ -17,7 +17,7 @@ export const onboardExamples = [
   "<%= config.bin %> onboard --resume",
   "<%= config.bin %> onboard --fresh",
   "<%= config.bin %> onboard --from ./Dockerfile --name alpha",
-  `<%= config.bin %> onboard --non-interactive --name alpha ${NOTICE_ACCEPT_FLAG}`,
+  `<%= config.bin %> onboard --non-interactive --yes --name alpha ${NOTICE_ACCEPT_FLAG}`,
 ];
 
 export type OnboardFlags = {
@@ -56,7 +56,7 @@ export function buildOnboardFlags(): Record<string, any> {
     }),
     yes: Flags.boolean({
       char: "y",
-      description: "Auto-accept the Ollama model-download size confirmation",
+      description: "Auto-confirm prompts that are safe for unattended onboarding",
     }),
     [acceptFlagName]: Flags.boolean({ description: "Accept the third-party software notice" }),
   } as Record<string, any>;

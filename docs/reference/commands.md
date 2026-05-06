@@ -133,7 +133,12 @@ or:
 $ NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE=1 nemoclaw onboard --non-interactive
 ```
 
-For scripted installer runs, set `NEMOCLAW_NON_INTERACTIVE=1` and `NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE=1` before invoking `curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash`.
+For scripted installer runs, pass explicit acceptance to the `bash` side of the installer pipe:
+
+```console
+$ curl -fsSL https://www.nvidia.com/nemoclaw.sh | NEMOCLAW_NON_INTERACTIVE=1 NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE=1 bash
+```
+
 If the installer cannot prompt for the notice in a terminal and no explicit acceptance is set, it exits before installing Node.js or the NemoClaw CLI.
 
 To enable Brave Search in non-interactive mode, set:
