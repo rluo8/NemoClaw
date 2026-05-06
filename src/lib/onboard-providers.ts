@@ -89,11 +89,13 @@ const REMOTE_PROVIDER_CONFIG = {
 
 // Providers that run on the host and need the local-inference policy preset.
 const LOCAL_INFERENCE_PROVIDERS = ["ollama-local", "vllm-local"];
-const KIMI_K26_MODEL_ID = "moonshotai/kimi-k2.6";
-const KIMI_K26_MANAGED_INFERENCE_COMPAT = {
-  requiresStringContent: true,
-  maxTokensField: "max_tokens",
-  requiresToolResultName: true,
+
+type SandboxInferenceConfig = {
+  providerKey: string;
+  primaryModelRef: string;
+  inferenceBaseUrl: string;
+  inferenceApi: string;
+  inferenceCompat: Record<string, unknown> | null;
 };
 
 // Re-exported alias matching the existing onboard.ts call sites. The canonical
@@ -301,7 +303,11 @@ function upsertMessagingProviders(tokenDefs, _runOpenshell) {
 
 // ── Sandbox inference config ─────────────────────────────────────
 
-function getSandboxInferenceConfig(model, provider = null, preferredInferenceApi = null) {
+function getSandboxInferenceConfig(
+  model: string,
+  provider: string | null = null,
+  preferredInferenceApi: string | null = null,
+): SandboxInferenceConfig {
   let providerKey;
   let primaryModelRef;
   let inferenceBaseUrl = "https://inference.local/v1";
@@ -340,17 +346,6 @@ function getSandboxInferenceConfig(model, provider = null, preferredInferenceApi
       providerKey = "inference";
       primaryModelRef = `inference/${model}`;
       break;
-  }
-
-  if (
-    providerKey === "inference" &&
-    inferenceApi === "openai-completions" &&
-    model.trim().toLowerCase() === KIMI_K26_MODEL_ID
-  ) {
-    inferenceCompat = {
-      ...(inferenceCompat || {}),
-      ...KIMI_K26_MANAGED_INFERENCE_COMPAT,
-    };
   }
 
   return { providerKey, primaryModelRef, inferenceBaseUrl, inferenceApi, inferenceCompat };
