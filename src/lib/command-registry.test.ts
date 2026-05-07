@@ -17,10 +17,10 @@ import type { CommandDef } from "./command-registry";
 
 describe("command-registry", () => {
   describe("COMMANDS array", () => {
-    it("should contain exactly 47 commands", () => {
+    it("should contain exactly 52 commands", () => {
       // 23 global (18 visible + 5 hidden help/version aliases)
-      // 24 sandbox (18 visible + 6 hidden shields/config)
-      expect(COMMANDS).toHaveLength(47);
+      // 29 sandbox (23 visible + 6 hidden shields/config)
+      expect(COMMANDS).toHaveLength(52);
     });
 
     it("should have no duplicate usage strings", () => {
@@ -52,9 +52,9 @@ describe("command-registry", () => {
   });
 
   describe("sandboxCommands()", () => {
-    it("should return exactly 24 entries", () => {
-      // 18 visible + 6 hidden (shields×3 + config×3)
-      expect(sandboxCommands()).toHaveLength(24);
+    it("should return exactly 29 entries", () => {
+      // 23 visible + 6 hidden (shields×3 + config get/set/rotate-token)
+      expect(sandboxCommands()).toHaveLength(29);
     });
 
     it("every entry has scope sandbox", () => {
@@ -65,10 +65,10 @@ describe("command-registry", () => {
   });
 
   describe("visibleCommands()", () => {
-    it("should exclude 11 hidden commands (36 visible)", () => {
+    it("should exclude 11 hidden commands (41 visible)", () => {
       // 5 hidden global (help, --help, -h, --version, -v) +
-      // 6 hidden sandbox (shields×3, config×3)
-      expect(visibleCommands()).toHaveLength(36);
+      // 6 hidden sandbox (shields×3, config get/set/rotate-token)
+      expect(visibleCommands()).toHaveLength(41);
     });
 
     it("no visible command has hidden=true", () => {
@@ -130,10 +130,18 @@ describe("command-registry", () => {
       }
     });
 
+    it("keeps optional flags out of canonical usage strings", () => {
+      for (const entry of canonicalUsageList()) {
+        expect(entry).not.toContain("[");
+      }
+    });
+
     it("excludes hidden commands", () => {
       const list = canonicalUsageList();
       expect(list).not.toContain("nemoclaw <name> shields down");
       expect(list).not.toContain("nemoclaw <name> config get");
+      expect(list).not.toContain("nemoclaw <name> config set");
+      expect(list).not.toContain("nemoclaw <name> config rotate-token");
     });
   });
 
@@ -167,13 +175,14 @@ describe("command-registry", () => {
   });
 
   describe("sandboxActionTokens()", () => {
-    it("returns exactly 15 unique action tokens including empty string", () => {
+    it("returns exactly 18 unique action tokens including empty string", () => {
       const tokens = sandboxActionTokens();
-      expect(tokens).toHaveLength(15);
-      // Must contain the same set as the old sandboxActions array
+      expect(tokens).toHaveLength(18);
+      // Must contain every first-level sandbox action plus the empty default action.
       const expected = new Set([
         "connect",
         "status",
+        "doctor",
         "logs",
         "policy-add",
         "policy-remove",
@@ -181,7 +190,9 @@ describe("command-registry", () => {
         "destroy",
         "skill",
         "rebuild",
+        "recover",
         "snapshot",
+        "share",
         "shields",
         "config",
         "channels",

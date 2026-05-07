@@ -4,6 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { CLI_NAME } from "./branding";
+
 export interface OnboardCommandOptions {
   nonInteractive: boolean;
   resume: boolean;
@@ -13,8 +15,10 @@ export interface OnboardCommandOptions {
   sandboxName: string | null;
   acceptThirdPartySoftware: boolean;
   agent: string | null;
-  dangerouslySkipPermissions: boolean;
   controlUiPort: number | null;
+  gpu: boolean;
+  noGpu: boolean;
+  autoYes: boolean;
 }
 
 export interface RunOnboardCommandDeps {
@@ -38,12 +42,23 @@ const ONBOARD_BASE_ARGS = [
   "--resume",
   "--fresh",
   "--recreate-sandbox",
-  "--dangerously-skip-permissions",
+  "--gpu",
+  "--no-gpu",
+  "--yes",
+  "-y",
 ];
 
 function onboardUsageLines(noticeAcceptFlag: string): string[] {
+  const name = CLI_NAME;
   return [
-    `  Usage: nemoclaw onboard [--non-interactive] [--resume | --fresh] [--recreate-sandbox] [--from <Dockerfile>] [--name <sandbox>] [--agent <name>] [--control-ui-port <N>] [--dangerously-skip-permissions] [${noticeAcceptFlag}]`,
+    `  Usage: ${name} onboard [--non-interactive] [--resume | --fresh] [--recreate-sandbox] [--gpu | --no-gpu] [--from <Dockerfile>] [--name <sandbox>] [--agent <name>] [--control-ui-port <N>] [--yes | -y] [${noticeAcceptFlag}]`,
+    "",
+    "  --from <Dockerfile> uses the Dockerfile's parent directory as the Docker build context.",
+    "  Put files referenced by COPY/ADD next to that Dockerfile, or move the Dockerfile into",
+    "  a dedicated build directory to avoid sending unrelated files to Docker.",
+    "  Common large directories are skipped: node_modules, .git, .venv, __pycache__.",
+    "  Credential-style files and directories such as .env*, .ssh, .aws, .netrc, .npmrc, secrets/, *.pem, and *.key are also skipped.",
+    "  Generated output directories such as dist/, build/, and target/ are still included.",
     "",
   ];
 }
@@ -76,6 +91,10 @@ export function parseOnboardArgs(
     const resolvedFromDockerfile = path.resolve(requestedFromDockerfile);
     if (!fs.existsSync(resolvedFromDockerfile)) {
       error(`  --from path not found: ${resolvedFromDockerfile}`);
+      exit(1);
+    }
+    if (!fs.statSync(resolvedFromDockerfile).isFile()) {
+      error(`  --from must point to a Dockerfile: ${resolvedFromDockerfile}`);
       exit(1);
     }
     fromDockerfile = requestedFromDockerfile;
@@ -148,6 +167,13 @@ export function parseOnboardArgs(
     printOnboardUsage(error, noticeAcceptFlag);
     exit(1);
   }
+  const gpu = parsedArgs.includes("--gpu");
+  const noGpu = parsedArgs.includes("--no-gpu");
+  if (gpu && noGpu) {
+    error("  --gpu and --no-gpu are mutually exclusive.");
+    printOnboardUsage(error, noticeAcceptFlag);
+    exit(1);
+  }
 
   return {
     nonInteractive: parsedArgs.includes("--non-interactive"),
@@ -159,8 +185,10 @@ export function parseOnboardArgs(
     acceptThirdPartySoftware:
       parsedArgs.includes(noticeAcceptFlag) || String(deps.env[noticeAcceptEnv] || "") === "1",
     agent,
-    dangerouslySkipPermissions: parsedArgs.includes("--dangerously-skip-permissions"),
     controlUiPort,
+    gpu,
+    noGpu,
+    autoYes: parsedArgs.includes("--yes") || parsedArgs.includes("-y"),
   };
 }
 
@@ -178,14 +206,15 @@ export async function runOnboardCommand(deps: RunOnboardCommandDeps): Promise<vo
 export async function runDeprecatedOnboardAliasCommand(
   deps: RunDeprecatedOnboardAliasCommandDeps,
 ): Promise<void> {
+  const cliName = CLI_NAME;
   const log = deps.log ?? console.log;
   log("");
   if (deps.kind === "setup") {
-    log("  ⚠  `nemoclaw setup` is deprecated. Use `nemoclaw onboard` instead.");
+    log(`  ⚠  \`${cliName} setup\` is deprecated. Use \`${cliName} onboard\` instead.`);
   } else {
-    log("  ⚠  `nemoclaw setup-spark` is deprecated.");
+    log(`  ⚠  \`${cliName} setup-spark\` is deprecated.`);
     log("  Current OpenShell releases handle the old DGX Spark cgroup issue themselves.");
-    log("  Use `nemoclaw onboard` instead.");
+    log(`  Use \`${cliName} onboard\` instead.`);
   }
   log("");
   await runOnboardCommand(deps);

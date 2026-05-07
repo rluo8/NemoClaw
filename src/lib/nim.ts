@@ -3,9 +3,8 @@
 //
 // NIM container management — pull, start, stop, health-check NIM images.
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+const fs = require("fs");
 const { runCapture } = require("./runner");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const {
   dockerContainerInspectFormat,
   dockerForceRm,
@@ -15,21 +14,22 @@ const {
   dockerRm,
   dockerRunDetached,
   dockerStop,
-} = require("./docker");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+} = require("./adapters/docker");
 const { sleepSeconds } = require("./wait");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const nimImages = require("../../bin/lib/nim-images.json");
 
 import { VLLM_PORT } from "./ports";
 
 const UNIFIED_MEMORY_GPU_TAGS = ["GB10", "Thor", "Orin", "Xavier"];
+const NIM_STATUS_PROBE_TIMEOUT_MS = 5000;
 
 export interface NimModel {
   name: string;
   image: string;
   minGpuMemoryMB: number;
 }
+
+export type NvidiaPlatform = "spark" | "station" | "linux";
 
 export interface GpuDetection {
   type: string;
@@ -41,6 +41,64 @@ export interface GpuDetection {
   nimCapable: boolean;
   unifiedMemory?: boolean;
   spark?: boolean;
+  platform?: NvidiaPlatform;
+}
+
+// Read the platform model name from firmware. Try DMI first (covers Spark
+// and Station, observed empirically), fall back to devicetree on systems
+// without DMI tables. Returns "" if neither is readable.
+function readPlatformModel(): string {
+  try {
+    const dmi = fs.readFileSync("/sys/class/dmi/id/product_name", "utf-8").trim();
+    if (dmi) return dmi;
+  } catch {
+    /* no dmi */
+  }
+  try {
+    return fs
+      .readFileSync("/sys/firmware/devicetree/base/model", "utf-8")
+      .replace(/\0/g, "")
+      .trim();
+  } catch {
+    /* not arm devicetree */
+  }
+  return "";
+}
+
+export function detectNvidiaPlatform(): NvidiaPlatform {
+  const model = readPlatformModel();
+  if (/DGX[_\s-]+Spark/i.test(model)) return "spark";
+  if (
+    /(?<![A-Za-z0-9])P3830(?![A-Za-z0-9])/i.test(model) ||
+    /DGX[_\s-]+Station/i.test(model) ||
+    (/Station/i.test(model) && /GB300/i.test(model))
+  ) {
+    return "station";
+  }
+  return "linux";
+}
+
+// Return the indices of NVIDIA GPUs whose name matches `pattern`. Returns
+// [] if nvidia-smi is unavailable or no GPU matches. Used to pin a Docker
+// container to a specific GPU on hosts with mixed configurations (e.g.
+// DGX Station's GB300 alongside other GPUs).
+export function getGpuIndicesByName(pattern: RegExp): number[] {
+  const out = runCapture(
+    ["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader,nounits"],
+    { ignoreError: true },
+  );
+  if (!out) return [];
+  const indices: number[] = [];
+  for (const line of out.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf(",");
+    if (idx === -1) continue;
+    const i = Number(trimmed.slice(0, idx).trim());
+    const name = trimmed.slice(idx + 1).trim();
+    if (!Number.isNaN(i) && pattern.test(name)) indices.push(i);
+  }
+  return indices;
 }
 
 export interface NimStatus {
@@ -72,25 +130,47 @@ export function canRunNimWithMemory(totalMemoryMB: number): boolean {
 }
 
 export function detectGpu(): GpuDetection | null {
-  // Try NVIDIA first — query VRAM
+  // Try NVIDIA first — query name and VRAM in a single call so the preflight
+  // line can show the GPU model alongside the memory size.
   try {
     const output = runCapture(
-      ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+      ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
       { ignoreError: true },
     );
     if (output) {
-      const lines = output.split("\n").filter((l: string) => l.trim());
-      const perGpuMB = lines
-        .map((l: string) => parseInt(l.trim(), 10))
-        .filter((n: number) => !isNaN(n));
-      if (perGpuMB.length > 0) {
-        const totalMemoryMB = perGpuMB.reduce((a: number, b: number) => a + b, 0);
+      type ParsedGpu = { name: string; memoryMB: number };
+      const parsed: ParsedGpu[] = [];
+      for (const raw of output.split("\n")) {
+        const line = raw.trim();
+        if (!line) continue;
+        // Split on the LAST comma — GPU names can contain commas in rare cases.
+        const idx = line.lastIndexOf(",");
+        if (idx === -1) continue;
+        const name = line.slice(0, idx).trim();
+        const memoryMB = parseInt(line.slice(idx + 1).trim(), 10);
+        if (isNaN(memoryMB)) continue;
+        parsed.push({ name, memoryMB });
+      }
+      if (parsed.length > 0) {
+        const totalMemoryMB = parsed.reduce(
+          (sum: number, p: ParsedGpu) => sum + p.memoryMB,
+          0,
+        );
+        const firstName = parsed[0].name;
+        // Only surface a single name when every GPU reports the same model;
+        // a mixed-GPU host would otherwise be misreported as `Nx <firstName>`.
+        const allSameName =
+          !!firstName && parsed.every((p: ParsedGpu) => p.name === firstName);
+        const platform = detectNvidiaPlatform();
         return {
           type: "nvidia",
-          count: perGpuMB.length,
+          ...(allSameName ? { name: firstName } : {}),
+          count: parsed.length,
           totalMemoryMB,
-          perGpuMB: perGpuMB[0],
+          perGpuMB: parsed[0].memoryMB,
           nimCapable: canRunNimWithMemory(totalMemoryMB),
+          platform,
+          spark: platform === "spark",
         };
       }
     }
@@ -127,7 +207,16 @@ export function detectGpu(): GpuDetection | null {
       }
       const count = unifiedGpuNames.length;
       const perGpuMB = count > 0 ? Math.floor(totalMemoryMB / count) : totalMemoryMB;
-      const isSpark = unifiedGpuNames.some((name: string) => /GB10/i.test(name));
+      // Cross-check the firmware model against the GPU name. Spark must have
+      // a GB10; falling through to firmware lets us classify Station too.
+      const firmwarePlatform = detectNvidiaPlatform();
+      const hasGb10 = unifiedGpuNames.some((name: string) => /GB10/i.test(name));
+      const platform: NvidiaPlatform =
+        firmwarePlatform === "spark" || hasGb10
+          ? "spark"
+          : firmwarePlatform === "station"
+            ? "station"
+            : "linux";
       return {
         type: "nvidia",
         name: unifiedGpuNames[0],
@@ -136,7 +225,8 @@ export function detectGpu(): GpuDetection | null {
         perGpuMB: perGpuMB || totalMemoryMB,
         nimCapable: canRunNimWithMemory(totalMemoryMB),
         unifiedMemory: true,
-        spark: isSpark,
+        spark: platform === "spark",
+        platform,
       };
     }
   } catch {
@@ -323,14 +413,20 @@ export function nimStatus(sandboxName: string, port?: number): NimStatus {
 
 export function nimStatusByName(name: string, port?: number): NimStatus {
   try {
-    const state = dockerContainerInspectFormat("{{.State.Status}}", name, { ignoreError: true });
+    const state = dockerContainerInspectFormat("{{.State.Status}}", name, {
+      ignoreError: true,
+      timeout: NIM_STATUS_PROBE_TIMEOUT_MS,
+    });
     if (!state) return { running: false, container: name };
 
     let healthy = false;
     if (state === "running") {
       let resolvedHostPort = port != null ? Number(port) : 0;
       if (!resolvedHostPort) {
-        const mapping = dockerPort(name, "8000", { ignoreError: true });
+        const mapping = dockerPort(name, "8000", {
+          ignoreError: true,
+          timeout: NIM_STATUS_PROBE_TIMEOUT_MS,
+        });
         const m = mapping && mapping.match(/:(\d+)\s*$/);
         resolvedHostPort = m ? Number(m[1]) : VLLM_PORT;
       }
@@ -344,7 +440,7 @@ export function nimStatusByName(name: string, port?: number): NimStatus {
           "5",
           `http://127.0.0.1:${resolvedHostPort}/v1/models`,
         ],
-        { ignoreError: true },
+        { ignoreError: true, timeout: NIM_STATUS_PROBE_TIMEOUT_MS + 1000 },
       );
       healthy = !!health;
     }

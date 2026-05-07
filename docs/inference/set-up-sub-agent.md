@@ -12,6 +12,8 @@ content:
   type: how_to
   difficulty: technical_intermediate
   audience: ["developer", "engineer"]
+skill:
+  priority: 30
 status: published
 ---
 
@@ -35,13 +37,13 @@ When adapting an OpenClaw sub-agent setup, use these paths inside the sandbox:
 | Path | Purpose |
 |---|---|
 | `/sandbox/.openclaw/openclaw.json` | OpenClaw config, including `models.providers`, `agents.defaults`, and `agents.list`. |
-| `/sandbox/.openclaw/.config-hash` | Integrity hash for `openclaw.json`. Refresh it after editing the config. |
-| `/sandbox/.openclaw-data/agents/<agent-id>/agent/auth-profiles.json` | Per-agent provider credentials. Use this when a sub-agent calls an auxiliary provider directly. |
-| `/sandbox/.openclaw-data/workspace/` | Writable shared workspace path for files the primary agent passes to the sub-agent. |
+| `/sandbox/.openclaw/.config-hash` | Hash for `openclaw.json`. Keep it in sync after manual config edits; it becomes a startup-enforced trust anchor only after the file is root-owned and read-only. |
+| `/sandbox/.openclaw/agents/<agent-id>/agent/auth-profiles.json` | Per-agent provider credentials. Use this when a sub-agent calls an auxiliary provider directly. |
+| `/sandbox/.openclaw/workspace/` | Writable shared workspace path for files the primary agent passes to the sub-agent. |
 | `/tmp/gateway.log` | OpenClaw gateway log. Use it to confirm config reloads and diagnose sub-agent failures. |
 
-For file-based tasks, instruct agents to use `/sandbox/.openclaw-data/workspace/`.
-Avoid relying on symlinked or read-only OpenClaw paths in delegation instructions.
+For file-based tasks, instruct agents to use `/sandbox/.openclaw/workspace/`.
+Avoid relying on legacy `.openclaw-data` paths or read-only OpenClaw paths in delegation instructions.
 
 ## Omni Vision Sub-Agent Example
 
@@ -73,7 +75,8 @@ $ docker exec "$DOCKER_CTR" kubectl exec -n openshell "$SANDBOX" -c agent -- cat
 Create `/tmp/openclaw.updated.json` with the OpenClaw sub-agent config.
 For the Omni example, the demo provides `vlm-demo/vlm-subagent/openclaw-patch.py`.
 
-Upload the patched config and refresh the hash:
+Upload the patched config and refresh the hash.
+In the default mutable state, this keeps the local hash consistent but does not make it tamper-proof; lock the config root-owned and read-only afterward if the sandbox should enforce config integrity at startup.
 
 ```console
 $ docker exec "$DOCKER_CTR" kubectl exec -n openshell "$SANDBOX" -c agent -- chmod 644 /sandbox/.openclaw/openclaw.json
@@ -92,14 +95,14 @@ If the auxiliary model uses a provider key outside the normal NemoClaw inference
 For the Omni example:
 
 ```text
-/sandbox/.openclaw-data/agents/vision-operator/agent/auth-profiles.json
+/sandbox/.openclaw/agents/vision-operator/agent/auth-profiles.json
 ```
 
 Use the same provider ID that appears in `models.providers`, such as `nvidia-omni`.
 After uploading the auth profile, make sure the sub-agent directory is owned by the sandbox user:
 
 ```console
-$ docker exec "$DOCKER_CTR" kubectl exec -n openshell "$SANDBOX" -c agent -- chown -R sandbox:sandbox /sandbox/.openclaw-data/agents/vision-operator
+$ docker exec "$DOCKER_CTR" kubectl exec -n openshell "$SANDBOX" -c agent -- chown -R sandbox:sandbox /sandbox/.openclaw/agents/vision-operator
 ```
 
 ## Allow Auxiliary Provider Egress
@@ -115,7 +118,7 @@ OpenClaw handles `sessions_spawn`, but the primary agent still needs task instru
 Place those instructions in the writable workspace, for example:
 
 ```text
-/sandbox/.openclaw-data/workspace/TOOLS.md
+/sandbox/.openclaw/workspace/TOOLS.md
 ```
 
 The Omni demo includes `vlm-demo/vlm-subagent/TOOLS.md`, which tells `main` to delegate image tasks to `vision-operator` and tells the sub-agent to read the image path it receives.
@@ -136,4 +139,4 @@ Use the following resources for more information:
 
 - Refer to [OpenClaw Sub-Agents](https://docs.openclaw.ai/tools/subagents) for `sessions_spawn`, `agents.list`, nesting, tool policy, and auth behavior.
 - Refer to [Switch Inference Providers](switch-inference-providers.md) to change the primary orchestration model instead of adding a sub-agent model.
-- Refer to [Workspace Files](../workspace/workspace-files.md) to understand per-agent workspace directories.
+- Refer to [Workspace Files](../manage-sandboxes/workspace-files.md) to understand per-agent workspace directories.

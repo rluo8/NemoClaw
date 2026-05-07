@@ -183,10 +183,14 @@ reviews:
         - `cloud-e2e` — full onboard + cloud inference
         - `sandbox-operations-e2e` — multi-sandbox lifecycle
         - `rebuild-openclaw-e2e` — workspace state survives rebuild
+        - `messaging-compatible-endpoint-e2e` — Telegram + compatible endpoint
+          inference.local regression
+        - `hermes-discord-e2e` — Hermes Discord config schema + placeholder
+          isolation
 
         To run selectively:
         ```
-        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=cloud-e2e,sandbox-operations-e2e,rebuild-openclaw-e2e
+        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=cloud-e2e,sandbox-operations-e2e,rebuild-openclaw-e2e,messaging-compatible-endpoint-e2e,hermes-discord-e2e
         ```
 
     - path: "src/nemoclaw.ts"
@@ -197,11 +201,10 @@ reviews:
         **E2E test recommendation:**
         - `sandbox-survival-e2e` — gateway restart recovery
         - `sandbox-operations-e2e` — process recovery after gateway kill
-        - `skip-permissions-e2e` — permissive policy activation
 
         To run selectively:
         ```
-        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=sandbox-survival-e2e,sandbox-operations-e2e,skip-permissions-e2e
+        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=sandbox-survival-e2e,sandbox-operations-e2e
         ```
 
     - path: "src/lib/cluster-image-patch.ts"
@@ -233,7 +236,7 @@ reviews:
         gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=deployment-services-e2e
         ```
 
-    - path: "src/lib/sandbox-state.ts"
+    - path: "src/lib/state/sandbox.ts"
       instructions: |
         This file manages sandbox state (backup, restore, rebuild,
         snapshot). Changes affect data persistence across sandbox
@@ -268,11 +271,14 @@ reviews:
 
         **E2E test recommendation:**
         - `hermes-e2e` — Hermes onboard + health probe + live inference
+        - `hermes-discord-e2e` — Hermes Discord config schema + placeholder
+          isolation
         - `rebuild-hermes-e2e` — Hermes upgrade path
+        - `rebuild-hermes-stale-base-e2e` — Hermes rebuild with stale cached base image
 
         To run selectively:
         ```
-        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=hermes-e2e,rebuild-hermes-e2e
+        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=hermes-e2e,hermes-discord-e2e,rebuild-hermes-e2e,rebuild-hermes-stale-base-e2e
         ```
 
     - path: "nemoclaw-blueprint/policies/**"
@@ -282,11 +288,10 @@ reviews:
 
         **E2E test recommendation:**
         - `network-policy-e2e` — deny-by-default, whitelist, hot-reload, SSRF
-        - `skip-permissions-e2e` — permissive policy activation
 
         To run selectively:
         ```
-        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=network-policy-e2e,skip-permissions-e2e
+        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=network-policy-e2e
         ```
 
     - path: "test/e2e/test-issue-2478-crash-loop-recovery.sh"
@@ -368,6 +373,41 @@ reviews:
 
     - path: "docs/reference/commands.md"
       instructions: *e2e-docs-validation
+
+    - path: "test/e2e/test-messaging-compatible-endpoint.sh"
+      instructions: |
+        This script validates the Telegram + OpenAI-compatible endpoint
+        regression path with a local mock endpoint. Changes here affect
+        the hermetic coverage for managed inference.local routing from
+        messaging-triggered agent turns.
+
+        **E2E test recommendation:**
+        - `messaging-compatible-endpoint-e2e` — Telegram + compatible
+          endpoint inference.local routing
+
+        To run selectively:
+        ```
+        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=messaging-compatible-endpoint-e2e
+        ```
+
+    - path: "test/e2e/test-kimi-inference-compat.sh"
+      instructions: &e2e-kimi-inference-compat |
+        This script validates Kimi K2.6 managed inference.local
+        compatibility with a hermetic OpenAI-compatible mock endpoint.
+        Changes here affect OpenClaw tool-call splitting and trajectory
+        proof for the Kimi compatibility path.
+
+        **E2E test recommendation:**
+        - `kimi-inference-compat-e2e` — Kimi managed inference.local
+          compatibility and safe exec splitting
+
+        To run selectively:
+        ```
+        gh workflow run nightly-e2e.yaml --ref <branch> -f jobs=kimi-inference-compat-e2e
+        ```
+
+    - path: "nemoclaw-blueprint/openclaw-plugins/kimi-inference-compat/**"
+      instructions: *e2e-kimi-inference-compat
 
     - path: ".github/workflows/nightly-e2e.yaml"
       instructions: |

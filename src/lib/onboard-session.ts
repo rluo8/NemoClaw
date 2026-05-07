@@ -12,6 +12,10 @@ import path from "node:path";
 
 import { redactSensitiveText, redactUrl } from "./redact";
 import { isErrnoException } from "./errno";
+import {
+  sanitizeMessagingChannelConfig,
+  type MessagingChannelConfig,
+} from "./messaging-channel-config";
 import type { WebSearchConfig } from "./web-search";
 
 export const SESSION_VERSION = 1;
@@ -74,9 +78,12 @@ export interface Session {
   credentialEnv: string | null;
   preferredInferenceApi: string | null;
   nimContainer: string | null;
+  routerPid: number | null;
+  routerCredentialHash: string | null;
   webSearchConfig: WebSearchConfig | null;
   policyPresets: string[] | null;
   messagingChannels: string[] | null;
+  messagingChannelConfig: MessagingChannelConfig | null;
   // SHA-256 hex digest of every legacy credential value successfully
   // written to the OpenShell gateway during this onboard session, keyed by
   // env-name. Persisted across process restarts so a `--resume` run that
@@ -89,8 +96,14 @@ export interface Session {
   // migrated set is NOT seeded from the persisted record, so the cleanup
   // gate keeps the file until the *current* value is actually re-migrated.
   migratedLegacyValueHashes: Record<string, string> | null;
+  gpuPassthrough: boolean;
+  telegramConfig: TelegramConfig | null;
   metadata: SessionMetadata;
   steps: Record<string, StepState>;
+}
+
+export interface TelegramConfig {
+  requireMention: boolean;
 }
 
 export interface LockInfo {
@@ -116,10 +129,15 @@ export interface SessionUpdates {
   credentialEnv?: string;
   preferredInferenceApi?: string;
   nimContainer?: string;
+  routerPid?: number;
+  routerCredentialHash?: string;
   webSearchConfig?: WebSearchConfig | null;
   policyPresets?: string[];
   messagingChannels?: string[];
+  messagingChannelConfig?: MessagingChannelConfig | null;
   migratedLegacyValueHashes?: Record<string, string>;
+  gpuPassthrough?: boolean;
+  telegramConfig?: TelegramConfig | null;
   metadata?: { gatewayName?: string; fromDockerfile?: string | null };
 }
 
@@ -139,6 +157,7 @@ export interface DebugSessionSummary {
   preferredInferenceApi: string | null;
   nimContainer: string | null;
   policyPresets: string[] | null;
+  gpuPassthrough: boolean;
   lastStepStarted: string | null;
   lastCompletedStep: string | null;
   failure: SessionFailure | null;
@@ -180,6 +199,10 @@ function readString(value: SessionJsonValue | undefined): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function readPositiveInteger(value: SessionJsonValue | undefined): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
 function readStringArray(value: SessionJsonValue | undefined): string[] | null {
   if (!Array.isArray(value)) return null;
   return value.filter((entry): entry is string => typeof entry === "string");
@@ -207,6 +230,13 @@ function readStepStatus(value: SessionJsonValue | undefined): StepStatus | null 
 
 function parseWebSearchConfig(value: SessionJsonValue | undefined): WebSearchConfig | null {
   return isObject(value) && value.fetchEnabled === true ? { fetchEnabled: true } : null;
+}
+
+function parseTelegramConfig(value: unknown): TelegramConfig | null {
+  if (!isObject(value)) return null;
+  if (value.requireMention === true) return { requireMention: true };
+  if (value.requireMention === false) return { requireMention: false };
+  return null;
 }
 
 function parseSessionMetadata(value: SessionJsonValue | undefined): SessionMetadata | undefined {
@@ -281,13 +311,18 @@ export function createSession(overrides: Partial<Session> = {}): Session {
     credentialEnv: overrides.credentialEnv ?? null,
     preferredInferenceApi: overrides.preferredInferenceApi ?? null,
     nimContainer: overrides.nimContainer ?? null,
+    routerPid: readPositiveInteger(overrides.routerPid),
+    routerCredentialHash: overrides.routerCredentialHash ?? null,
     webSearchConfig:
       overrides.webSearchConfig?.fetchEnabled === true ? { fetchEnabled: true } : null,
     policyPresets: readStringArray(overrides.policyPresets),
     messagingChannels: readStringArray(overrides.messagingChannels),
+    messagingChannelConfig: sanitizeMessagingChannelConfig(overrides.messagingChannelConfig),
     migratedLegacyValueHashes: overrides.migratedLegacyValueHashes
       ? readStringRecord(overrides.migratedLegacyValueHashes)
       : null,
+    gpuPassthrough: overrides.gpuPassthrough === true,
+    telegramConfig: parseTelegramConfig(overrides.telegramConfig),
     metadata: {
       gatewayName: overrides.metadata?.gatewayName ?? "nemoclaw",
       fromDockerfile: overrides.metadata?.fromDockerfile ?? null,
@@ -299,7 +334,6 @@ export function createSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
-// eslint-disable-next-line complexity
 export function normalizeSession(data: Session | SessionJsonValue | undefined): Session | null {
   if (!isObject(data) || data.version !== SESSION_VERSION) return null;
 
@@ -316,10 +350,15 @@ export function normalizeSession(data: Session | SessionJsonValue | undefined): 
     credentialEnv: readString(data.credentialEnv),
     preferredInferenceApi: readString(data.preferredInferenceApi),
     nimContainer: readString(data.nimContainer),
+    routerPid: readPositiveInteger(data.routerPid),
+    routerCredentialHash: readString(data.routerCredentialHash),
     webSearchConfig: parseWebSearchConfig(data.webSearchConfig),
     policyPresets: readStringArray(data.policyPresets),
     messagingChannels: readStringArray(data.messagingChannels),
+    messagingChannelConfig: sanitizeMessagingChannelConfig(data.messagingChannelConfig),
     migratedLegacyValueHashes: readStringRecord(data.migratedLegacyValueHashes),
+    gpuPassthrough: data.gpuPassthrough === true,
+    telegramConfig: parseTelegramConfig(data.telegramConfig),
     lastStepStarted: readString(data.lastStepStarted),
     lastCompletedStep: readString(data.lastCompletedStep),
     failure: sanitizeFailure(isObject(data.failure) ? data.failure : null),
@@ -385,6 +424,8 @@ function parseLockFile(contents: string): LockInfo | null {
   }
 }
 
+const MALFORMED_STALE_SECONDS = 30;
+
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -393,6 +434,49 @@ function isProcessAlive(pid: number): boolean {
   } catch (error) {
     return isErrnoException(error) && error.code === "EPERM";
   }
+}
+
+function readProcProcessStartMs(pid: number): number | null {
+  try {
+    const statText = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const btimeLine = fs
+      .readFileSync("/proc/stat", "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("btime "));
+    const bootSeconds = btimeLine ? Number(btimeLine.trim().split(/\s+/)[1]) : NaN;
+    const closeParen = statText.lastIndexOf(")");
+    if (!Number.isFinite(bootSeconds) || closeParen < 0) return null;
+
+    const fieldsAfterComm = statText
+      .slice(closeParen + 2)
+      .trim()
+      .split(/\s+/);
+    const startTicks = Number(fieldsAfterComm[19]);
+    if (!Number.isFinite(startTicks)) return null;
+
+    // Linux exposes /proc/<pid>/stat starttime in USER_HZ ticks. 100 is the
+    // stable value on supported NemoClaw Linux hosts.
+    const clockTicksPerSecond = 100;
+    return (bootSeconds + startTicks / clockTicksPerSecond) * 1000;
+  } catch {
+    return null;
+  }
+}
+
+function lockHolderStillMatches(lock: LockInfo): boolean {
+  if (!isProcessAlive(lock.pid)) return false;
+  if (lock.pid === process.pid) return true;
+
+  const lockStartedMs = lock.startedAt ? Date.parse(lock.startedAt) : NaN;
+  if (!Number.isFinite(lockStartedMs)) return true;
+
+  const processStartMs = readProcProcessStartMs(lock.pid);
+  if (processStartMs === null) return true;
+
+  // The original lock holder must have started before it wrote the lock. If
+  // the currently-live PID started after the lock timestamp, the PID was reused
+  // and the lock is stale even though kill(pid, 0) succeeds.
+  return processStartMs <= lockStartedMs + 1000;
 }
 
 // File descriptor we hold across the lifetime of an acquired lock. On
@@ -454,12 +538,25 @@ export function acquireOnboardLock(command: string | null = null): LockResult {
         throw readError;
       }
       if (!existing) {
-        // Malformed lock file — leave it on disk (a human or another
-        // process may be mid-write) and retry. Pre-#1281 behavior
-        // preserved: never unlink a malformed lock automatically.
+        // Malformed lock file. If the file is very recent (<30 s), a
+        // concurrent process may be mid-write — leave it and retry.
+        // Otherwise the file is stale debris from a crash between
+        // openSync("wx") and writeSync() — remove it so subsequent
+        // onboard runs are not permanently blocked (#2765).
+        try {
+          const lockStat = fs.statSync(LOCK_FILE);
+          const ageMs = Date.now() - lockStat.mtimeMs;
+          if (ageMs > MALFORMED_STALE_SECONDS * 1000) {
+            unlinkIfInodeMatches(LOCK_FILE, staleInode);
+          }
+        } catch (statErr) {
+          if (!(isErrnoException(statErr) && statErr.code === "ENOENT")) {
+            throw statErr;
+          }
+        }
         continue;
       }
-      if (isProcessAlive(existing.pid)) {
+      if (lockHolderStillMatches(existing)) {
         return {
           acquired: false,
           lockFile: LOCK_FILE,
@@ -615,6 +712,12 @@ export function filterSafeUpdates(updates: SessionUpdates): Partial<Session> {
   if (typeof updates.preferredInferenceApi === "string")
     safe.preferredInferenceApi = updates.preferredInferenceApi;
   if (typeof updates.nimContainer === "string") safe.nimContainer = updates.nimContainer;
+  if (typeof updates.routerPid === "number" && Number.isInteger(updates.routerPid) && updates.routerPid > 0) {
+    safe.routerPid = updates.routerPid;
+  }
+  if (typeof updates.routerCredentialHash === "string") {
+    safe.routerCredentialHash = updates.routerCredentialHash;
+  }
   if (isObject(updates.webSearchConfig) && updates.webSearchConfig.fetchEnabled === true) {
     safe.webSearchConfig = { fetchEnabled: true };
   } else if (updates.webSearchConfig === null) {
@@ -626,12 +729,26 @@ export function filterSafeUpdates(updates: SessionUpdates): Partial<Session> {
   if (Array.isArray(updates.messagingChannels)) {
     safe.messagingChannels = updates.messagingChannels.filter((value) => typeof value === "string");
   }
+  if (updates.messagingChannelConfig === null) {
+    safe.messagingChannelConfig = null;
+  } else {
+    const messagingChannelConfig = sanitizeMessagingChannelConfig(updates.messagingChannelConfig);
+    if (messagingChannelConfig) safe.messagingChannelConfig = messagingChannelConfig;
+  }
   if (isObject(updates.migratedLegacyValueHashes)) {
     const cleaned: Record<string, string> = {};
     for (const [k, v] of Object.entries(updates.migratedLegacyValueHashes)) {
       if (typeof k === "string" && typeof v === "string") cleaned[k] = v;
     }
     safe.migratedLegacyValueHashes = cleaned;
+  }
+  if (updates.gpuPassthrough === true || updates.gpuPassthrough === false) {
+    safe.gpuPassthrough = updates.gpuPassthrough;
+  }
+  if (isObject(updates.telegramConfig) && typeof updates.telegramConfig.requireMention === "boolean") {
+    safe.telegramConfig = { requireMention: updates.telegramConfig.requireMention };
+  } else if (updates.telegramConfig === null) {
+    safe.telegramConfig = null;
   }
   if (isObject(updates.metadata) && typeof updates.metadata.gatewayName === "string") {
     safe.metadata = {
@@ -740,6 +857,7 @@ export function summarizeForDebug(
     preferredInferenceApi: session.preferredInferenceApi,
     nimContainer: session.nimContainer,
     policyPresets: session.policyPresets,
+    gpuPassthrough: session.gpuPassthrough,
     lastStepStarted: session.lastStepStarted,
     lastCompletedStep: session.lastCompletedStep,
     failure: sanitizeFailure(session.failure),
