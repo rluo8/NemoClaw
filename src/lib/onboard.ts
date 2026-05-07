@@ -272,6 +272,9 @@ const {
   saveCredential,
 } = credentials;
 const { hashCredential }: typeof import("./credential-hash") = require("./credential-hash");
+const {
+  cleanupStaleHostFiles,
+}: typeof import("./host-artifact-cleanup") = require("./host-artifact-cleanup");
 const registry: typeof import("./state/registry") = require("./state/registry");
 const nim: typeof import("./nim") = require("./nim");
 const onboardSession: typeof import("./onboard-session") = require("./onboard-session");
@@ -9954,6 +9957,13 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
           `providers/channels enabled to migrate them, then the file is removed automatically.`,
       );
     }
+    // Sweep stale host files left over from older NemoClaw versions —
+    // e.g. an empty/orphaned ~/.nemoclaw/credentials.json from upgrades
+    // before the credentials-gateway move (issue #3105). Each registered
+    // entry enforces its own safety guards; this call is a no-op when
+    // every target is already clean.
+    cleanupStaleHostFiles();
+
     // Post-deployment verification — confirm the full delivery chain is
     // operational before telling the user "YOUR AGENT IS LIVE". Fixes #2342.
     const verifyDeploymentModule: typeof import("./verify-deployment") = require("./verify-deployment");
