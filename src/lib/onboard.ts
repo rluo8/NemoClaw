@@ -7712,6 +7712,8 @@ function arePolicyPresetsApplied(sandboxName: string, selectedPresets: string[] 
 
 // Skip carrying previous policies forward when the user gives a non-interactive
 // NEMOCLAW_POLICY_PRESETS or NEMOCLAW_POLICY_MODE override (#2675).
+// "suggested"/"default"/"auto" are intentionally absent — they map to the
+// implicit carry-forward semantic, equivalent to leaving NEMOCLAW_POLICY_MODE unset.
 const EXPLICIT_POLICY_MODES = ["skip", "none", "no", "custom", "list"];
 function shouldCarryPreviousPolicies(
   previousPolicies: string[] | null | undefined,
