@@ -41,15 +41,20 @@ export function parseSandboxStatus(output: string, sandboxName: string): string 
 }
 
 /**
- * Check if a sandbox is in Ready state from `openshell sandbox list` output.
+ * Check if a sandbox is in a live state from `openshell sandbox list` output.
  * Strips ANSI codes and exact-matches the sandbox name in the first column.
- * Checks all columns for "Ready" (not just column 2) because the column
- * layout of `openshell sandbox list` varies across OpenShell versions.
+ * Checks all columns for "Ready" or "Running" (not just column 2) because
+ * the column layout of `openshell sandbox list` varies across OpenShell versions.
+ *
+ * Both "Ready" and "Running" indicate the sandbox is alive and health
+ * checks should proceed. On some deployments (e.g. Brev launchables) the
+ * sandbox stays in "Running" phase which is functionally equivalent to
+ * "Ready" — the agent is live and the gateway is reachable inside.
  */
 export function isSandboxReady(output: string, sandboxName: string): boolean {
   const cols = parseSandboxRow(output, sandboxName);
   if (!cols) return false;
-  return cols.includes("Ready") && !cols.includes("NotReady");
+  return (cols.includes("Ready") || cols.includes("Running")) && !cols.includes("NotReady");
 }
 
 /**

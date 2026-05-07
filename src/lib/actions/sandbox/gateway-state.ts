@@ -328,7 +328,7 @@ export async function ensureLiveSandboxOrExit(
   const lookup = await getReconciledSandboxGatewayState(sandboxName);
   if (lookup.state === "present") {
     const phase = parseSandboxPhase(lookup.output || "");
-    if (!allowNonReadyPhase && phase && phase !== "Ready") {
+    if (!allowNonReadyPhase && phase && phase !== "Ready" && phase !== "Running") {
       console.error(`  Sandbox '${sandboxName}' is stuck in '${phase}' phase.`);
       console.error(
         "  This usually happens when a process crash inside the sandbox prevented clean startup.",
