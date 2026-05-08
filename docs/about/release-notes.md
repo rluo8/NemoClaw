@@ -55,3 +55,9 @@ $ bash <(curl -fsSL https://www.nvidia.com/nemoclaw.sh)
 ```
 
 The installer error message in v0.0.35+ surfaces all three invocations directly so users can copy-paste a recovery without leaving the terminal.
+
+## Component Version Policy
+
+NemoClaw pins the OpenClaw version inside the sandbox at build time via `min_openclaw_version` in `nemoclaw-blueprint/blueprint.yaml`; existing sandboxes do not auto-upgrade.
+Run `nemoclaw <name> status` to see the OpenClaw version currently running in a sandbox, and `nemoclaw <name> rebuild` to pick up a newer pin from a NemoClaw upgrade.
+See [Checking the OpenClaw version](../reference/commands.md#checking-the-openclaw-version) for the full policy.
