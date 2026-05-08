@@ -826,6 +826,24 @@ function loadBlueprintProfile(
 const ROUTER_HEALTH_RETRIES = 15;
 const ROUTER_HEALTH_INTERVAL_MS = 2000;
 const ROUTER_HEALTH_TIMEOUT_MS = 3000;
+const MODEL_ROUTER_RELATIVE_DIR = path.join("nemoclaw-blueprint", "router", "llm-router");
+const MODEL_ROUTER_VENV_DIR = path.join(os.homedir(), ".nemoclaw", "model-router-venv");
+const MODEL_ROUTER_FINGERPRINT_FILE = ".nemoclaw-source-fingerprint";
+const MODEL_ROUTER_FINGERPRINT_IGNORED_NAMES = new Set([
+  ".git",
+  ".hg",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".svn",
+  ".venv",
+  "__pycache__",
+  "build",
+  "dist",
+  "node_modules",
+  "venv",
+]);
+const DEFAULT_MODEL_ROUTER_CREDENTIAL_ENV = "NVIDIA_API_KEY";
 
 async function isRouterHealthy(port: number, timeoutMs = ROUTER_HEALTH_TIMEOUT_MS): Promise<boolean> {
   const http = require("http");
@@ -880,12 +898,223 @@ async function stopModelRouterProcess(pid: number, port: number): Promise<void> 
   }
 }
 
+function resolveHostCommandPath(commandName: string): string | null {
+  const result = runCapture(["sh", "-c", 'command -v "$1"', "--", commandName], {
+    ignoreError: true,
+  }).trim();
+  return result || null;
+}
+
+function modelRouterPackageDir(): string {
+  return path.join(ROOT, MODEL_ROUTER_RELATIVE_DIR);
+}
+
+function modelRouterVenvDir(): string {
+  return process.env.NEMOCLAW_MODEL_ROUTER_VENV || MODEL_ROUTER_VENV_DIR;
+}
+
+function modelRouterCommandPath(venvDir = modelRouterVenvDir()): string {
+  return path.join(venvDir, "bin", "model-router");
+}
+
+function modelRouterFingerprintPath(venvDir = modelRouterVenvDir()): string {
+  return path.join(venvDir, MODEL_ROUTER_FINGERPRINT_FILE);
+}
+
+function isExecutableFile(filePath: string): boolean {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isModelRouterPackageReady(routerDir = modelRouterPackageDir()): boolean {
+  return fs.existsSync(path.join(routerDir, "pyproject.toml")) ||
+    fs.existsSync(path.join(routerDir, "setup.py"));
+}
+
+function shouldSkipModelRouterFingerprintEntry(name: string): boolean {
+  return MODEL_ROUTER_FINGERPRINT_IGNORED_NAMES.has(name) || name.endsWith(".egg-info");
+}
+
+function hashModelRouterSourceTree(routerDir = modelRouterPackageDir()): string | null {
+  const sourceHash = crypto.createHash("sha256");
+
+  const hashDirectory = (currentDir: string): boolean => {
+    let entries: import("fs").Dirent[];
+    try {
+      entries = fs
+        .readdirSync(currentDir, { withFileTypes: true })
+        .sort((left: import("fs").Dirent, right: import("fs").Dirent) =>
+          left.name.localeCompare(right.name),
+        );
+    } catch {
+      return false;
+    }
+
+    let hashedSourceFile = false;
+    for (const entry of entries) {
+      if (shouldSkipModelRouterFingerprintEntry(entry.name)) continue;
+      if (entry.name.endsWith(".pyc") || entry.name.endsWith(".pyo")) continue;
+
+      const entryPath = path.join(currentDir, entry.name);
+      const relativePath = path.relative(routerDir, entryPath).split(path.sep).join("/");
+      if (entry.isDirectory()) {
+        hashedSourceFile = hashDirectory(entryPath) || hashedSourceFile;
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        try {
+          sourceHash.update(`link:${relativePath}\0`);
+          sourceHash.update(fs.readlinkSync(entryPath));
+          sourceHash.update("\0");
+          hashedSourceFile = true;
+        } catch {
+          // Ignore unreadable links; the install step will fail if they are required.
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      sourceHash.update(`file:${relativePath}\0`);
+      sourceHash.update(fs.readFileSync(entryPath));
+      sourceHash.update("\0");
+      hashedSourceFile = true;
+    }
+    return hashedSourceFile;
+  };
+
+  return hashDirectory(routerDir) ? `files:${sourceHash.digest("hex")}` : null;
+}
+
+function getModelRouterSourceFingerprint(routerDir = modelRouterPackageDir()): string | null {
+  const gitHead = runCapture(["git", "-C", routerDir, "rev-parse", "HEAD"], {
+    ignoreError: true,
+  }).trim();
+  if (/^[0-9a-f]{40}$/i.test(gitHead)) return `git:${gitHead}`;
+
+  const gitLink = runCapture(["git", "-C", ROOT, "rev-parse", `HEAD:${MODEL_ROUTER_RELATIVE_DIR}`], {
+    ignoreError: true,
+  }).trim();
+  if (/^[0-9a-f]{40}$/i.test(gitLink)) return `gitlink:${gitLink}`;
+
+  return hashModelRouterSourceTree(routerDir);
+}
+
+function readModelRouterInstalledFingerprint(venvDir = modelRouterVenvDir()): string | null {
+  try {
+    const fingerprint = fs.readFileSync(modelRouterFingerprintPath(venvDir), "utf8").trim();
+    return fingerprint || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeModelRouterInstalledFingerprint(
+  fingerprint: string | null,
+  venvDir = modelRouterVenvDir(),
+): void {
+  if (!fingerprint) return;
+  fs.writeFileSync(modelRouterFingerprintPath(venvDir), `${fingerprint}\n`, { mode: 0o600 });
+}
+
+function isManagedModelRouterCurrent(
+  routerDir = modelRouterPackageDir(),
+  venvDir = modelRouterVenvDir(),
+): boolean {
+  if (!isExecutableFile(modelRouterCommandPath(venvDir))) return false;
+  const sourceFingerprint = getModelRouterSourceFingerprint(routerDir);
+  return Boolean(
+    sourceFingerprint && readModelRouterInstalledFingerprint(venvDir) === sourceFingerprint,
+  );
+}
+
+function initializeModelRouterSubmodule(routerDir = modelRouterPackageDir()): void {
+  if (isModelRouterPackageReady(routerDir)) return;
+  if (!fs.existsSync(path.join(ROOT, ".gitmodules")) || !fs.existsSync(path.join(ROOT, ".git"))) {
+    return;
+  }
+  console.log("  Initializing Model Router source...");
+  run(["git", "-C", ROOT, "submodule", "update", "--init", "--depth", "1", MODEL_ROUTER_RELATIVE_DIR], {
+    ignoreError: true,
+  });
+}
+
+function installModelRouterCommand(routerDir = modelRouterPackageDir()): string {
+  initializeModelRouterSubmodule(routerDir);
+  if (!isModelRouterPackageReady(routerDir)) {
+    throw new Error(
+      `Model Router source is not initialized at ${routerDir}. ` +
+        `Run: git -C ${ROOT} submodule update --init --depth 1 ${MODEL_ROUTER_RELATIVE_DIR}`,
+    );
+  }
+
+  if (!resolveHostCommandPath("python3")) {
+    throw new Error("python3 is required to prepare Model Router.");
+  }
+
+  const venvDir = modelRouterVenvDir();
+  const venvPython = path.join(venvDir, "bin", "python");
+  const routerCommand = modelRouterCommandPath(venvDir);
+  const sourceFingerprint = getModelRouterSourceFingerprint(routerDir);
+
+  fs.mkdirSync(path.dirname(venvDir), { recursive: true });
+  console.log(`  Preparing Model Router environment: ${venvDir}`);
+  const venvResult = run(["python3", "-m", "venv", venvDir], {
+    ignoreError: true,
+    timeout: 120_000,
+  });
+  if (venvResult.status !== 0 || !fs.existsSync(venvPython)) {
+    throw new Error("Failed to create Model Router virtual environment.");
+  }
+
+  const installResult = run(
+    [venvPython, "-m", "pip", "install", "--quiet", "--upgrade", `${routerDir}[prefill,proxy]`],
+    {
+      ignoreError: true,
+      timeout: 600_000,
+    },
+  );
+  if (installResult.status !== 0) {
+    throw new Error("Failed to install Model Router dependencies.");
+  }
+  if (!isExecutableFile(routerCommand)) {
+    throw new Error("Model Router install did not produce the model-router command.");
+  }
+  writeModelRouterInstalledFingerprint(sourceFingerprint, venvDir);
+  return routerCommand;
+}
+
+function ensureModelRouterCommand(): string {
+  const routerDir = modelRouterPackageDir();
+  const venvDir = modelRouterVenvDir();
+  const managedCommand = modelRouterCommandPath(venvDir);
+
+  if (isModelRouterPackageReady(routerDir) && isManagedModelRouterCurrent(routerDir, venvDir)) {
+    return managedCommand;
+  }
+
+  if (!isModelRouterPackageReady(routerDir)) {
+    initializeModelRouterSubmodule(routerDir);
+  }
+
+  if (isModelRouterPackageReady(routerDir)) {
+    if (isManagedModelRouterCurrent(routerDir, venvDir)) return managedCommand;
+    return installModelRouterCommand(routerDir);
+  }
+
+  if (isExecutableFile(managedCommand)) return managedCommand;
+  return resolveHostCommandPath("model-router") || installModelRouterCommand();
+}
+
 /**
  * Start the model-router proxy and wait for it to become healthy.
  * Follows the same pattern as Ollama startup (spawn detached, poll health).
  * Returns the PID of the child process.
  */
 async function startModelRouter(routerCfg: BlueprintRouterConfig): Promise<number> {
+  const routerCommand = ensureModelRouterCommand();
   const port = routerCfg.port || 4000;
   const blueprintDir = path.join(ROOT, "nemoclaw-blueprint");
   const poolConfigPath = path.join(
@@ -898,7 +1127,7 @@ async function startModelRouter(routerCfg: BlueprintRouterConfig): Promise<numbe
   fs.mkdirSync(stateDir, { recursive: true });
 
   const proxyConfigResult = spawnSync(
-    "model-router",
+    routerCommand,
     ["proxy-config", "--config", poolConfigPath, "--output", litellmConfigPath],
     { encoding: "utf8", timeout: 30_000, cwd: blueprintDir },
   );
@@ -910,7 +1139,7 @@ async function startModelRouter(routerCfg: BlueprintRouterConfig): Promise<numbe
 
   const { buildSubprocessEnv } = require("./subprocess-env");
   const credEnvVars: Record<string, string> = {};
-  const credName = routerCfg.credential_env || "NVIDIA_API_KEY";
+  const credName = routerCfg.credential_env || DEFAULT_MODEL_ROUTER_CREDENTIAL_ENV;
   const routedCredential = resolveProviderCredential(credName);
   const openAiCredential = resolveProviderCredential("OPENAI_API_KEY");
   if (routedCredential) {
@@ -931,7 +1160,7 @@ async function startModelRouter(routerCfg: BlueprintRouterConfig): Promise<numbe
   }
 
   const child = spawn(
-    "model-router",
+    routerCommand,
     [
       "proxy",
       "--litellm-config", litellmConfigPath,
@@ -1014,7 +1243,8 @@ function isRoutedInferenceProvider(provider: string | null | undefined): boolean
 async function reconcileModelRouter(): Promise<void> {
   const bp = getRoutedProfile();
   const routerPort = bp.router.port || 4000;
-  const routerCredentialEnv = bp.router.credential_env || bp.credential_env || "NVIDIA_API_KEY";
+  const routerCredentialEnv =
+    bp.router.credential_env || bp.credential_env || DEFAULT_MODEL_ROUTER_CREDENTIAL_ENV;
   const routerCredential =
     hydrateCredentialEnv(routerCredentialEnv) ||
     normalizeCredentialValue(bp.credential_default || "");
@@ -5946,7 +6176,7 @@ async function setupNim(
   // Model Router: complexity-based routing via blueprint config.
   const blueprintRouterCfg = loadBlueprintProfile("routed");
   if (blueprintRouterCfg && blueprintRouterCfg.router?.enabled === true) {
-    options.push({ key: "routed", label: "Model Router (complexity-based routing)" });
+    options.push({ key: "routed", label: "Model Router (experimental)" });
   }
 
   function checkOllamaPortsOrWarn(): boolean {
@@ -6850,7 +7080,8 @@ async function setupNim(
           if (isNonInteractive()) process.exit(1);
           continue selectionLoop;
         }
-        const routerCredentialEnv = bp.router?.credential_env || bp.credential_env || "OPENAI_API_KEY";
+        const routerCredentialEnv =
+          bp.router?.credential_env || bp.credential_env || DEFAULT_MODEL_ROUTER_CREDENTIAL_ENV;
         credentialEnv = routerCredentialEnv;
         const routedCredential =
           hydrateCredentialEnv(routerCredentialEnv) ||
@@ -7143,7 +7374,7 @@ async function setupInference(
       console.error(`  ✗ Failed to start model router: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
-    const resolvedCredentialEnv = credentialEnv || "NVIDIA_API_KEY";
+    const resolvedCredentialEnv = credentialEnv || DEFAULT_MODEL_ROUTER_CREDENTIAL_ENV;
     const credentialValue = hydrateCredentialEnv(resolvedCredentialEnv);
     const env = credentialValue ? { [resolvedCredentialEnv]: credentialValue } : {};
     const providerResult = upsertProvider(
