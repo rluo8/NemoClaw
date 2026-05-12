@@ -1476,6 +1476,13 @@ verify_nemoclaw() {
       # current shell's PATH cache is stale. The user-facing PATH-refresh
       # hint is still emitted so future shells pick the binary up by name
       # (#3276).
+      #
+      # Deliberately leave NEMOCLAW_READY_NOW=false here: that flag means
+      # "the calling shell can resolve $_CLI_BIN by name", which is exactly
+      # what's not true on this branch. print_done() routes through ONBOARD_RAN
+      # + _needs_cli_refresh to render the "refresh PATH before using the CLI"
+      # message; flipping READY_NOW=true would short-circuit that and falsely
+      # advertise the CLI as immediately runnable by name.
       _CLI_PATH="$npm_bin/$_CLI_BIN"
       NEMOCLAW_CURRENT_SHELL_NEEDS_PATH_REFRESH=true
       NEMOCLAW_RECOVERY_PROFILE="$(detect_shell_profile)"
@@ -1493,19 +1500,23 @@ verify_nemoclaw() {
     fi
   fi
 
+  # Single warn header, then plain printf for each bullet. warn() prefixes
+  # every line with "[warn]" + colour codes, which would render the bulleted
+  # diagnostic table as six separate warnings rather than one structured block.
   warn "Could not locate the ${_CLI_BIN} executable after install. Searched:"
   if command_exists "$_CLI_BIN"; then
-    warn "  - PATH lookup ('command -v ${_CLI_BIN}'):  $(command -v "$_CLI_BIN")  (rejected — not the real CLI)"
+    printf '    - PATH lookup (command -v %s):  %s  (rejected — not the real CLI)\n' \
+      "$_CLI_BIN" "$(command -v "$_CLI_BIN")"
   else
-    warn "  - PATH lookup ('command -v ${_CLI_BIN}'):  not found"
+    printf '    - PATH lookup (command -v %s):  not found\n' "$_CLI_BIN"
   fi
   if [[ -n "$npm_bin" ]]; then
-    warn "  - npm prefix bin:                          ${npm_bin}/${_CLI_BIN}"
+    printf '    - npm prefix bin:    %s/%s\n' "$npm_bin" "$_CLI_BIN"
   else
-    warn "  - npm prefix bin:                          (npm not configured)"
+    printf '    - npm prefix bin:    (npm not configured)\n'
   fi
-  warn "  - User shim dir:                           ${NEMOCLAW_SHIM_DIR}/${_CLI_BIN}"
-  warn "  Active PATH: ${PATH:-(empty)}"
+  printf '    - User shim dir:     %s/%s\n' "$NEMOCLAW_SHIM_DIR" "$_CLI_BIN"
+  printf '    Active PATH: %s\n' "${PATH:-(empty)}"
   warn "Try re-running:  curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash"
   error "Installation failed: ${_CLI_BIN} binary not found."
 }
