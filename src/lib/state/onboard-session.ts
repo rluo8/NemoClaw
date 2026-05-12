@@ -28,6 +28,7 @@ export const LOCK_FILE = path.join(SESSION_DIR, "onboard.lock");
 type SessionJsonValue = JsonValue;
 type UnknownRecord = JsonObject;
 type StepStatus = "pending" | "in_progress" | "complete" | "failed" | "skipped";
+export type HermesAuthMethod = "oauth" | "api_key";
 
 const STEP_STATES: readonly StepStatus[] = [
   "pending",
@@ -75,6 +76,7 @@ export interface Session {
   model: string | null;
   endpointUrl: string | null;
   credentialEnv: string | null;
+  hermesAuthMethod: HermesAuthMethod | null;
   preferredInferenceApi: string | null;
   nimContainer: string | null;
   routerPid: number | null;
@@ -121,13 +123,17 @@ export interface LockResult {
 }
 
 export interface SessionUpdates {
-  sandboxName?: string;
-  provider?: string;
-  model?: string;
-  endpointUrl?: string;
-  credentialEnv?: string;
-  preferredInferenceApi?: string;
-  nimContainer?: string;
+  // Nullable fields accept `null` as an explicit clear (e.g. a provider
+  // switch from remote→local clears `credentialEnv`). `undefined` means
+  // "leave unchanged". See filterSafeUpdates(). GH #2625.
+  sandboxName?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  endpointUrl?: string | null;
+  credentialEnv?: string | null;
+  hermesAuthMethod?: HermesAuthMethod | null;
+  preferredInferenceApi?: string | null;
+  nimContainer?: string | null;
   routerPid?: number;
   routerCredentialHash?: string;
   webSearchConfig?: WebSearchConfig | null;
@@ -153,6 +159,7 @@ export interface DebugSessionSummary {
   model: string | null;
   endpointUrl: string | null;
   credentialEnv: string | null;
+  hermesAuthMethod: HermesAuthMethod | null;
   preferredInferenceApi: string | null;
   nimContainer: string | null;
   policyPresets: string[] | null;
@@ -196,6 +203,10 @@ export function isObject(value: unknown): value is UnknownRecord {
 
 function readString(value: SessionJsonValue | undefined): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function readHermesAuthMethod(value: SessionJsonValue | undefined): HermesAuthMethod | null {
+  return value === "oauth" || value === "api_key" ? value : null;
 }
 
 function readPositiveInteger(value: SessionJsonValue | undefined): number | null {
@@ -308,6 +319,7 @@ export function createSession(overrides: Partial<Session> = {}): Session {
     model: overrides.model ?? null,
     endpointUrl: overrides.endpointUrl ?? null,
     credentialEnv: overrides.credentialEnv ?? null,
+    hermesAuthMethod: overrides.hermesAuthMethod ?? null,
     preferredInferenceApi: overrides.preferredInferenceApi ?? null,
     nimContainer: overrides.nimContainer ?? null,
     routerPid: readPositiveInteger(overrides.routerPid),
@@ -347,6 +359,7 @@ export function normalizeSession(data: Session | SessionJsonValue | undefined): 
     model: readString(data.model),
     endpointUrl: typeof data.endpointUrl === "string" ? redactUrl(data.endpointUrl) : null,
     credentialEnv: readString(data.credentialEnv),
+    hermesAuthMethod: readHermesAuthMethod(data.hermesAuthMethod),
     preferredInferenceApi: readString(data.preferredInferenceApi),
     nimContainer: readString(data.nimContainer),
     routerPid: readPositiveInteger(data.routerPid),
@@ -700,17 +713,58 @@ export function releaseOnboardLock(): void {
 
 // ── Step management ──────────────────────────────────────────────
 
+// Apply an explicit-clear-aware update for a nullable session field.
+//
+//   value === "string"  → assign (after optional normalizer)
+//   value === null      → explicit clear (persisted as null)
+//   value === undefined → leave unchanged (caller didn't supply this field)
+//
+// Before GH #2625 the persistence layer only accepted strings, which meant
+// a provider switch from remote (credentialEnv="OPENAI_API_KEY") to local
+// (credentialEnv=null) silently dropped the clear and left the stale value
+// on disk. The rebuild preflight then demanded a credential the current
+// sandbox does not actually need.
+function assignNullableString<K extends keyof Session>(
+  safe: Partial<Session>,
+  key: K,
+  value: unknown,
+  normalize?: (v: string) => string | null,
+): void {
+  if (value === undefined) return;
+  if (value === null) {
+    (safe as Record<K, Session[K] | null>)[key] = null as Session[K] & null;
+    return;
+  }
+  if (typeof value === "string") {
+    const normalized = normalize ? normalize(value) : value;
+    if (normalized === null) {
+      // A normalizer that returned null means the input was unredactable;
+      // treat the same as an explicit clear rather than dropping silently.
+      (safe as Record<K, Session[K] | null>)[key] = null as Session[K] & null;
+      return;
+    }
+    (safe as Record<K, Session[K]>)[key] = normalized as Session[K];
+  }
+  // Non-string, non-null, non-undefined values are silently dropped —
+  // matches the pre-#2625 behavior for malformed input (e.g. numbers via
+  // JSON re-entry).
+}
+
 export function filterSafeUpdates(updates: SessionUpdates): Partial<Session> {
   const safe: Partial<Session> = {};
   if (!isObject(updates)) return safe;
-  if (typeof updates.sandboxName === "string") safe.sandboxName = updates.sandboxName;
-  if (typeof updates.provider === "string") safe.provider = updates.provider;
-  if (typeof updates.model === "string") safe.model = updates.model;
-  if (typeof updates.endpointUrl === "string") safe.endpointUrl = redactUrl(updates.endpointUrl);
-  if (typeof updates.credentialEnv === "string") safe.credentialEnv = updates.credentialEnv;
-  if (typeof updates.preferredInferenceApi === "string")
-    safe.preferredInferenceApi = updates.preferredInferenceApi;
-  if (typeof updates.nimContainer === "string") safe.nimContainer = updates.nimContainer;
+  assignNullableString(safe, "sandboxName", updates.sandboxName);
+  assignNullableString(safe, "provider", updates.provider);
+  assignNullableString(safe, "model", updates.model);
+  assignNullableString(safe, "endpointUrl", updates.endpointUrl, redactUrl);
+  assignNullableString(safe, "credentialEnv", updates.credentialEnv);
+  if (updates.hermesAuthMethod === "oauth" || updates.hermesAuthMethod === "api_key") {
+    safe.hermesAuthMethod = updates.hermesAuthMethod;
+  } else if (updates.hermesAuthMethod === null) {
+    safe.hermesAuthMethod = null;
+  }
+  assignNullableString(safe, "preferredInferenceApi", updates.preferredInferenceApi);
+  assignNullableString(safe, "nimContainer", updates.nimContainer);
   if (typeof updates.routerPid === "number" && Number.isInteger(updates.routerPid) && updates.routerPid > 0) {
     safe.routerPid = updates.routerPid;
   }
@@ -853,6 +907,7 @@ export function summarizeForDebug(
     model: session.model,
     endpointUrl: redactUrl(session.endpointUrl),
     credentialEnv: session.credentialEnv,
+    hermesAuthMethod: session.hermesAuthMethod,
     preferredInferenceApi: session.preferredInferenceApi,
     nimContainer: session.nimContainer,
     policyPresets: session.policyPresets,

@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/* v8 ignore start -- thin oclif adapter covered through CLI integration tests. */
 
 import { Args, Command, Flags } from "@oclif/core";
 
-import { connectSandbox } from "./actions/sandbox/runtime";
+import { connectSandbox } from "./actions/sandbox/connect";
 
 export default class RecoverCliCommand extends Command {
   static id = "sandbox:recover";

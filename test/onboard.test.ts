@@ -8,12 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 
 import type { AgentDefinition } from "../dist/lib/agent/defs.js";
 import { loadAgent } from "../dist/lib/agent/defs.js";
 import { buildChain, buildControlUiUrls } from "../dist/lib/dashboard/contract.js";
 import { NAME_ALLOWED_FORMAT } from "../dist/lib/name-validation.js";
-import { stageOptimizedSandboxBuildContext } from "../dist/lib/sandbox-build-context.js";
+import { stageOptimizedSandboxBuildContext } from "../dist/lib/sandbox/build-context.js";
 
 type ShimScalar = string | number | boolean | null | undefined;
 type ShimCallable = (...args: readonly string[]) => ShimValue;
@@ -49,9 +50,19 @@ type OnboardTestInternals = {
   buildCompatibleEndpointSandboxSmokeCommand: (model: string) => string;
   buildCompatibleEndpointSandboxSmokeScript: (model: string) => string;
   buildSandboxConfigSyncScript: ShimFn<string>;
+  buildSandboxGpuCreateArgs: (config: {
+    sandboxGpuEnabled: boolean;
+    sandboxGpuDevice?: string | null;
+  }) => string[];
+  buildDirectGpuPolicyYaml: (basePolicy: string) => string;
+  buildDirectSandboxGpuProofCommands: (sandboxName: string) => { label: string; args: string[] }[];
   classifySandboxCreateFailure: (output?: string) => { kind: string; uploadedToGateway: boolean };
   compactText: (value?: string) => string;
   computeSetupPresetSuggestions: ShimFn<string[]>;
+  filterSetupPolicyPresets: <T extends { name: string }>(
+    presets: T[],
+    options?: { webSearchSupported?: boolean | null },
+  ) => T[];
   formatEnvAssignment: (name: string, value: string) => string;
   findDashboardForwardOwner: (
     forwardListOutput: string | null | undefined,
@@ -73,6 +84,51 @@ type OnboardTestInternals = {
   getInstalledOpenshellVersion: (versionOutput?: string | null) => string | null;
   getBlueprintMinOpenshellVersion: (rootDir?: string) => string | null;
   getBlueprintMaxOpenshellVersion: (rootDir?: string) => string | null;
+  getDockerDriverGatewayEnv: (versionOutput?: string | null) => Record<string, string>;
+  getDockerDriverGatewayRuntimeDriftFromSnapshot: (snapshot: {
+    processEnv: Record<string, string> | null;
+    processExe: string | null;
+    desiredEnv: Record<string, string>;
+    gatewayBin?: string | null;
+  }) => { reason: string } | null;
+  isLinuxDockerDriverGatewayEnabled: (platform?: NodeJS.Platform) => boolean;
+  isDockerDriverGatewayPortListener: (
+    portCheck: {
+      ok: boolean;
+      process?: string;
+      pid?: number | null;
+    },
+    opts?: {
+      platform?: NodeJS.Platform;
+      gatewayBin?: string | null;
+      isPidAliveFn?: (pid: number) => boolean;
+      isDockerDriverGatewayProcessFn?: (pid: number, gatewayBin?: string | null) => boolean;
+    },
+  ) => boolean;
+  findReadableNvidiaCdiSpecFiles: (dirs: string[]) => string[];
+  parseDockerCdiSpecDirs: (value?: string | null) => string[];
+  resolveSandboxGpuConfig: (
+    gpu: { type: string } | null,
+    options?: { flag?: "enable" | "disable" | null; device?: string | null; env?: NodeJS.ProcessEnv },
+  ) => {
+    mode: "auto" | "1" | "0";
+    hostGpuDetected: boolean;
+    sandboxGpuEnabled: boolean;
+    sandboxGpuDevice: string | null;
+    errors: string[];
+  };
+  getResumeSandboxGpuOverrides: (
+    entry:
+      | { sandboxGpuMode?: "auto" | "1" | "0" | string | null; sandboxGpuDevice?: string | null }
+      | null
+      | undefined,
+    sessionGpuPassthrough?: boolean,
+  ) => { flag: "enable" | "disable" | null; device: string | null };
+  shouldAllowOpenshellAboveBlueprintMax: (
+    versionOutput?: string | null,
+    platform?: NodeJS.Platform,
+    env?: NodeJS.ProcessEnv,
+  ) => boolean;
   versionGte: (left?: string | null, right?: string | null) => boolean;
   getRequestedModelHint: ShimFn<string | null>;
   getRequestedProviderHint: ShimFn<string | null>;
@@ -92,6 +148,8 @@ type OnboardTestInternals = {
   isGatewayHealthy: ShimFn<boolean>;
   classifyValidationFailure: ShimFn<ValidationClassification>;
   hasResponsesToolCall: (body?: string | null) => boolean;
+  hasChatCompletionsToolCall: (body?: string | null) => boolean;
+  hasChatCompletionsToolCallLeak: (body?: string | null) => boolean;
   agentSupportsWebSearch: (
     agent?: AgentDefinition | null,
     dockerfilePathOverride?: string | null,
@@ -117,7 +175,7 @@ type OnboardTestInternals = {
     },
   ) => boolean;
   patchStagedDockerfile: ShimFn<void>;
-  pullAndResolveBaseImageDigest: () => { digest: string; ref: string } | null;
+  pullAndResolveBaseImageDigest: () => { digest: string | null; ref: string } | null;
   SANDBOX_BASE_IMAGE: string;
   printSandboxCreateRecoveryHints: ShimFn<void>;
   resolveDashboardForwardTarget: (chatUiUrl?: string) => string;
@@ -152,7 +210,22 @@ function isOnboardTestInternals(
     typeof value.buildCompatibleEndpointSandboxSmokeCommand === "function" &&
     typeof value.buildCompatibleEndpointSandboxSmokeScript === "function" &&
     typeof value.buildSandboxConfigSyncScript === "function" &&
+    typeof value.buildSandboxGpuCreateArgs === "function" &&
+    typeof value.buildDirectGpuPolicyYaml === "function" &&
+    typeof value.buildDirectSandboxGpuProofCommands === "function" &&
     typeof value.classifySandboxCreateFailure === "function" &&
+    typeof value.getDockerDriverGatewayEnv === "function" &&
+    typeof value.getDockerDriverGatewayRuntimeDriftFromSnapshot === "function" &&
+    typeof value.isLinuxDockerDriverGatewayEnabled === "function" &&
+    typeof value.isDockerDriverGatewayPortListener === "function" &&
+    typeof value.findReadableNvidiaCdiSpecFiles === "function" &&
+    typeof value.parseDockerCdiSpecDirs === "function" &&
+    typeof value.resolveSandboxGpuConfig === "function" &&
+    typeof value.getResumeSandboxGpuOverrides === "function" &&
+    typeof value.shouldAllowOpenshellAboveBlueprintMax === "function" &&
+    typeof value.hasChatCompletionsToolCall === "function" &&
+    typeof value.hasChatCompletionsToolCallLeak === "function" &&
+    typeof value.filterSetupPolicyPresets === "function" &&
     typeof value.getDefaultSandboxNameForAgent === "function" &&
     typeof value.getSandboxPromptDefault === "function" &&
     typeof value.getRequestedSandboxAgentName === "function" &&
@@ -181,9 +254,13 @@ const {
   buildCompatibleEndpointSandboxSmokeCommand,
   buildCompatibleEndpointSandboxSmokeScript,
   buildSandboxConfigSyncScript,
+  buildSandboxGpuCreateArgs,
+  buildDirectGpuPolicyYaml,
+  buildDirectSandboxGpuProofCommands,
   classifySandboxCreateFailure,
   compactText,
   computeSetupPresetSuggestions,
+  filterSetupPolicyPresets,
   formatEnvAssignment,
   getNavigationChoice,
   getGatewayReuseState,
@@ -193,6 +270,15 @@ const {
   getInstalledOpenshellVersion,
   getBlueprintMinOpenshellVersion,
   getBlueprintMaxOpenshellVersion,
+  getDockerDriverGatewayEnv,
+  getDockerDriverGatewayRuntimeDriftFromSnapshot,
+  isLinuxDockerDriverGatewayEnabled,
+  isDockerDriverGatewayPortListener,
+  findReadableNvidiaCdiSpecFiles,
+  parseDockerCdiSpecDirs,
+  resolveSandboxGpuConfig,
+  getResumeSandboxGpuOverrides,
+  shouldAllowOpenshellAboveBlueprintMax,
   versionGte,
   getRequestedModelHint,
   getRequestedProviderHint,
@@ -209,6 +295,8 @@ const {
   isGatewayHealthy,
   classifyValidationFailure,
   hasResponsesToolCall,
+  hasChatCompletionsToolCall,
+  hasChatCompletionsToolCallLeak,
   agentSupportsWebSearch,
   configureWebSearch,
   isLoopbackHostname,
@@ -230,7 +318,241 @@ const {
   formatSandboxBuildEstimateNote,
 } = onboardTestInternals;
 
+const repoRoot = path.join(import.meta.dirname, "..");
+
 describe("onboard helpers", () => {
+  it("resolves sandbox GPU auto/force/disable modes", () => {
+    const gpu = { type: "nvidia" };
+    expect(resolveSandboxGpuConfig(gpu, { env: {} }).sandboxGpuEnabled).toBe(true);
+    expect(
+      resolveSandboxGpuConfig(gpu, {
+        env: { NEMOCLAW_SANDBOX_GPU: "0" },
+      }).sandboxGpuEnabled,
+    ).toBe(false);
+    const forced = resolveSandboxGpuConfig(null, {
+      flag: "enable",
+      env: {},
+    });
+    expect(forced.mode).toBe("1");
+    expect(forced.errors.join("\n")).toContain("no NVIDIA GPU");
+  });
+
+  it("resumes sandbox GPU auto mode without turning CPU fallback into explicit opt-out", () => {
+    const resumedAuto = getResumeSandboxGpuOverrides(
+      { sandboxGpuMode: "auto", sandboxGpuDevice: null },
+      false,
+    );
+    expect(resumedAuto).toEqual({ flag: null, device: null });
+    expect(
+      resolveSandboxGpuConfig({ type: "nvidia" }, { ...resumedAuto, env: {} }).sandboxGpuEnabled,
+    ).toBe(true);
+
+    const resumedDisabled = getResumeSandboxGpuOverrides(
+      { sandboxGpuMode: "0", sandboxGpuDevice: null },
+      false,
+    );
+    expect(
+      resolveSandboxGpuConfig({ type: "nvidia" }, { ...resumedDisabled, env: {} })
+        .sandboxGpuEnabled,
+    ).toBe(false);
+
+    const legacyGpuSession = getResumeSandboxGpuOverrides(null, true);
+    expect(legacyGpuSession.flag).toBe("enable");
+  });
+
+  it("builds OpenShell sandbox GPU create args", () => {
+    expect(buildSandboxGpuCreateArgs({ sandboxGpuEnabled: false })).toEqual([]);
+    expect(buildSandboxGpuCreateArgs({ sandboxGpuEnabled: true })).toEqual(["--gpu"]);
+    expect(
+      buildSandboxGpuCreateArgs({ sandboxGpuEnabled: true, sandboxGpuDevice: "nvidia.com/gpu=0" }),
+    ).toEqual(["--gpu", "--gpu-device", "nvidia.com/gpu=0"]);
+  });
+
+  it("keeps /proc read-only and narrows GPU proc writes to comm", () => {
+    const basePolicy = fs.readFileSync(
+      path.join(repoRoot, "nemoclaw-blueprint", "policies", "openclaw-sandbox.yaml"),
+      "utf-8",
+    );
+    const gpuPolicy = buildDirectGpuPolicyYaml(basePolicy);
+    const baseDoc = YAML.parse(basePolicy);
+    const gpuDoc = YAML.parse(gpuPolicy);
+
+    expect(baseDoc.filesystem_policy.read_only).toContain("/proc");
+    expect(gpuDoc.filesystem_policy.read_only).toContain("/proc");
+    expect(gpuDoc.filesystem_policy.read_write).not.toContain("/proc");
+    expect(gpuDoc.filesystem_policy.read_write).toContain("/proc/self/task/*/comm");
+  });
+
+  it("removes stale broad /proc write entries from GPU policy input", () => {
+    const gpuPolicy = buildDirectGpuPolicyYaml(`
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+  read_write:
+    - /tmp
+    - /proc
+network_policies:
+  nvidia:
+    name: nvidia
+    endpoints:
+      - host: integrate.api.nvidia.com
+        port: 443
+`);
+    const gpuDoc = YAML.parse(gpuPolicy);
+
+    expect(gpuDoc.filesystem_policy.read_only).toContain("/proc");
+    expect(gpuDoc.filesystem_policy.read_write).toEqual([
+      "/tmp",
+      "/proc/self/task/*/comm",
+    ]);
+  });
+
+  it("models the Linux OpenShell Docker-driver gateway environment", () => {
+    expect(isLinuxDockerDriverGatewayEnabled("linux")).toBe(true);
+    expect(isLinuxDockerDriverGatewayEnabled("darwin")).toBe(false);
+    const env = getDockerDriverGatewayEnv("openshell 0.0.37");
+    expect(env.OPENSHELL_DRIVERS).toBe("docker");
+    expect(env.OPENSHELL_GRPC_ENDPOINT).toBe("http://127.0.0.1:8080");
+    expect(env.OPENSHELL_CLUSTER_IMAGE).toBeUndefined();
+    expect(env.OPENSHELL_DOCKER_SUPERVISOR_IMAGE).toContain(":0.0.37");
+  });
+
+  it("detects stale Docker-driver gateway runtime state before reuse", () => {
+    const desiredEnv = getDockerDriverGatewayEnv("openshell 0.0.37");
+    const gatewayBin = process.execPath;
+
+    expect(
+      getDockerDriverGatewayRuntimeDriftFromSnapshot({
+        processEnv: desiredEnv,
+        processExe: gatewayBin,
+        desiredEnv,
+        gatewayBin,
+      }),
+    ).toBeNull();
+
+    expect(
+      getDockerDriverGatewayRuntimeDriftFromSnapshot({
+        processEnv: {
+          ...desiredEnv,
+          OPENSHELL_DOCKER_SUPERVISOR_IMAGE:
+            "ghcr.io/nvidia/openshell/supervisor:0.0.36",
+        },
+        processExe: gatewayBin,
+        desiredEnv,
+        gatewayBin,
+      })?.reason,
+    ).toContain("OPENSHELL_DOCKER_SUPERVISOR_IMAGE=");
+
+    expect(
+      getDockerDriverGatewayRuntimeDriftFromSnapshot({
+        processEnv: desiredEnv,
+        processExe: `${gatewayBin} (deleted)`,
+        desiredEnv,
+        gatewayBin,
+      })?.reason,
+    ).toContain("replaced on disk");
+
+    expect(
+      getDockerDriverGatewayRuntimeDriftFromSnapshot({
+        processEnv: null,
+        processExe: gatewayBin,
+        desiredEnv,
+        gatewayBin,
+      })?.reason,
+    ).toContain("process environment");
+  });
+
+  it("recognizes an existing Docker-driver gateway listener on Linux", () => {
+    const opts = {
+      platform: "linux" as NodeJS.Platform,
+      isPidAliveFn: (pid: number) => pid === 1234,
+      isDockerDriverGatewayProcessFn: (pid: number, gatewayBin?: string | null) =>
+        pid === 1234 && gatewayBin === "/opt/openshell/openshell-gateway",
+      gatewayBin: "/opt/openshell/openshell-gateway",
+    };
+    expect(
+      isDockerDriverGatewayPortListener({ ok: false, process: "openshell", pid: 1234 }, opts),
+    ).toBe(true);
+    expect(
+      isDockerDriverGatewayPortListener({ ok: false, process: "openshell-", pid: 1234 }, opts),
+    ).toBe(true);
+    expect(
+      isDockerDriverGatewayPortListener({ ok: false, process: "node", pid: 1234 }, opts),
+    ).toBe(false);
+    expect(
+      isDockerDriverGatewayPortListener(
+        { ok: false, process: "openshell", pid: 1234 },
+        { ...opts, platform: "darwin" },
+      ),
+    ).toBe(false);
+    expect(
+      isDockerDriverGatewayPortListener(
+        { ok: false, process: "openshell", pid: 4321 },
+        { ...opts, isPidAliveFn: () => false },
+      ),
+    ).toBe(false);
+  });
+
+  it("recognizes Docker CDI and explicit dev-channel version gates", () => {
+    expect(parseDockerCdiSpecDirs('["/etc/cdi","/var/run/cdi"]')).toEqual([
+      "/etc/cdi",
+      "/var/run/cdi",
+    ]);
+    expect(parseDockerCdiSpecDirs("")).toEqual([]);
+    expect(
+      shouldAllowOpenshellAboveBlueprintMax("openshell 0.0.38.dev1+gabcdef", "linux", {
+        NEMOCLAW_OPENSHELL_CHANNEL: "dev",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAllowOpenshellAboveBlueprintMax("openshell 0.0.38.dev1+gabcdef", "linux", {
+        NEMOCLAW_OPENSHELL_CHANNEL: "auto",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAllowOpenshellAboveBlueprintMax("openshell 0.0.38", "linux", {
+        NEMOCLAW_OPENSHELL_CHANNEL: "dev",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires readable NVIDIA CDI spec files, not just CDI directories", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cdi-specs-"));
+    try {
+      const emptyDir = path.join(tmpDir, "empty");
+      const cdiDir = path.join(tmpDir, "cdi");
+      fs.mkdirSync(emptyDir);
+      fs.mkdirSync(cdiDir);
+      fs.writeFileSync(path.join(cdiDir, "unrelated.yaml"), "kind: example.com/device\n");
+      expect(findReadableNvidiaCdiSpecFiles([emptyDir, cdiDir])).toEqual([]);
+
+      const specPath = path.join(cdiDir, "gpu-devices.yaml");
+      fs.writeFileSync(
+        specPath,
+        ["cdiVersion: 0.6.0", "kind: nvidia.com/gpu", "devices:", "  - name: all", ""].join(
+          "\n",
+        ),
+      );
+      expect(findReadableNvidiaCdiSpecFiles([emptyDir, cdiDir])).toEqual([specPath]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("builds direct sandbox GPU proof commands", () => {
+    const commands = buildDirectSandboxGpuProofCommands("alpha");
+    expect(commands.map((entry) => entry.label)).toEqual([
+      "nvidia-smi",
+      "/proc/self/task/<tid>/comm write",
+      "cuInit(0) via libcuda.so.1",
+    ]);
+    expect(commands[0].args).toEqual(["sandbox", "exec", "-n", "alpha", "--", "nvidia-smi"]);
+    expect(commands[1].args.join(" ")).toContain("/proc/self/task/${tid}/comm");
+    expect(commands[2].args.join(" ")).toContain("cuInit(0)");
+  });
+
   it("uses Hermes-oriented sandbox defaults when NemoHermes selects Hermes", () => {
     const previousSandboxName = process.env.NEMOCLAW_SANDBOX_NAME;
     try {
@@ -530,6 +852,35 @@ describe("onboard helpers", () => {
       expect(suggestions).toEqual(["npm", "pypi", "huggingface", "brew", "brave"]);
     });
 
+    it("filters tier defaults to known presets for agent-specific onboarding", () => {
+      const suggestions = computeSetupPresetSuggestions("balanced", {
+        enabledChannels: [],
+        knownPresetNames: known.filter((name) => name !== "brave"),
+      });
+      expect(suggestions).toEqual(["npm", "pypi", "huggingface", "brew"]);
+    });
+
+    it("omits Brave when web search is unsupported", () => {
+      const allPresets = known.map((name) => ({ name }));
+      const unsupportedPresets = filterSetupPolicyPresets(allPresets, {
+        webSearchSupported: false,
+      }).map((p) => p.name);
+      const supportedPresets = filterSetupPolicyPresets(allPresets, {
+        webSearchSupported: true,
+      }).map((p) => p.name);
+      expect(unsupportedPresets).not.toContain("brave");
+      expect(supportedPresets).toContain("brave");
+    });
+
+    it("drops Brave tier defaults when web search is unsupported", () => {
+      const suggestions = computeSetupPresetSuggestions("balanced", {
+        enabledChannels: [],
+        knownPresetNames: known,
+        webSearchSupported: false,
+      });
+      expect(suggestions).toEqual(["npm", "pypi", "huggingface", "brew"]);
+    });
+
     it("forwards enabled messaging channels into the balanced tier suggestions", () => {
       const suggestions = computeSetupPresetSuggestions("balanced", {
         enabledChannels: ["telegram"],
@@ -573,6 +924,15 @@ describe("onboard helpers", () => {
         knownPresetNames: known,
       });
       expect(suggestions).toContain("brave");
+    });
+
+    it("does not add Brave from webSearchConfig when web search is unsupported", () => {
+      const suggestions = computeSetupPresetSuggestions("restricted", {
+        webSearchConfig: { provider: "brave" },
+        knownPresetNames: known,
+        webSearchSupported: false,
+      });
+      expect(suggestions).not.toContain("brave");
     });
 
     it("adds local-inference for local providers", () => {
@@ -1015,6 +1375,207 @@ describe("onboard helpers", () => {
       ),
     ).toBe(false);
     expect(hasResponsesToolCall("{")).toBe(false);
+  });
+
+  it("detects structured chat-completions tool_calls", () => {
+    expect(
+      hasChatCompletionsToolCall(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: { name: "sessions_send", arguments: '{"message":"hello"}' },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      hasChatCompletionsToolCall(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "OK", tool_calls: [] } }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      hasChatCompletionsToolCall(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: { name: "sessions_send" },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      hasChatCompletionsToolCall(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    type: "text",
+                    function: { name: "sessions_send", arguments: '{"message":"hello"}' },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(hasChatCompletionsToolCall("{")).toBe(false);
+  });
+
+  it("detects leaked stringified tool-call JSON in chat-completions content", () => {
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: '{\n  "arguments":{"message":"hello?"},\n  "name":"sessions_send"\n}',
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  type: "function",
+                  function: {
+                    name: "sessions_send",
+                    arguments: JSON.stringify({ message: "hello?" }),
+                  },
+                }),
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  tool_calls: [
+                    {
+                      type: "function",
+                      function: {
+                        name: "sessions_send",
+                        arguments: JSON.stringify({ message: "hello?" }),
+                      },
+                    },
+                  ],
+                }),
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: '{"arguments":{"message":"hello?"},"name":"sessions_send"}',
+                  },
+                ],
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "Regular assistant text response.",
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: '{"type":"function","function":{"name":"sessions_send"}}',
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      hasChatCompletionsToolCallLeak(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Regular assistant text response." }],
+                tool_calls: null,
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(hasChatCompletionsToolCallLeak("{")).toBe(false);
   });
 
   it("normalizes anthropic-compatible base URLs with a trailing /v1", () => {
@@ -1866,12 +2427,16 @@ const { loadAgent } = require(${agentDefsPath});
   });
 
   it("allows slow sandbox create recovery to wait beyond 60 seconds", () => {
+    const envSource = fs.readFileSync(
+      path.join(import.meta.dirname, "..", "src", "lib", "onboard", "env.ts"),
+      "utf-8",
+    );
     const source = fs.readFileSync(
       path.join(import.meta.dirname, "..", "src", "lib", "onboard.ts"),
       "utf-8",
     );
 
-    assert.match(source, /NEMOCLAW_SANDBOX_READY_TIMEOUT", 180/);
+    assert.match(envSource, /NEMOCLAW_SANDBOX_READY_TIMEOUT", 180/);
     assert.match(source, /Math\.ceil\(SANDBOX_READY_TIMEOUT_SECS \/ 2\)/);
     assert.match(source, /within \$\{SANDBOX_READY_TIMEOUT_SECS\}s/);
   });
@@ -1975,6 +2540,7 @@ mod._load = function(req, parent, isMain) {
   }
   return origLoad.call(this, req, parent, isMain);
 };
+Object.defineProperty(process, "platform", { value: "darwin" });
 const { startGateway } = require(${onboardPath});
 startGateway(null).catch(() => {});
 `;
@@ -2055,6 +2621,13 @@ startGateway(null).catch(() => {});
         "my-assistant   NotReady   init failed",
       ),
     ).toBe("not_ready");
+    expect(
+      getSandboxStateFromOutputs(
+        "my-assistant",
+        "Error: NotFound: sandbox not found",
+        "other-sandbox   Ready   2m ago",
+      ),
+    ).toBe("missing");
     expect(getSandboxStateFromOutputs("my-assistant", "", "")).toBe("missing");
   });
 
@@ -2484,7 +3057,9 @@ startGateway(null).catch(() => {});
     const scriptPath = path.join(tmpDir, "setup-inference-check.js");
     const onboardPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "onboard.js"));
     const runnerPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "runner.js"));
-    const registryPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "state", "registry.js"));
+    const registryPath = JSON.stringify(
+      path.join(repoRoot, "dist", "lib", "state", "registry.js"),
+    );
 
     fs.mkdirSync(fakeBin, { recursive: true });
     fs.writeFileSync(path.join(fakeBin, "openshell"), "#!/usr/bin/env bash\nexit 0\n", {
@@ -2553,6 +3128,181 @@ const { setupInference } = require(${onboardPath});
     assert.match(commands[2].command, /provider update/);
     assert.match(commands[3].command, /inference set/);
     assert.equal(payload.nvidiaApiKey, "nvapi-secret-value");
+  });
+
+  it("reuses a registered Hermes Provider without re-collecting host credentials", () => {
+    const repoRoot = path.join(import.meta.dirname, "..");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-hermes-reuse-"));
+    const fakeBin = path.join(tmpDir, "bin");
+    const scriptPath = path.join(tmpDir, "setup-hermes-reuse-check.js");
+    const onboardPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "onboard.js"));
+    const runnerPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "runner.js"));
+    const registryPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "state", "registry.js"));
+
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.writeFileSync(path.join(fakeBin, "openshell"), "#!/usr/bin/env bash\nexit 0\n", {
+      mode: 0o755,
+    });
+
+    const script = String.raw`
+const runner = require(${runnerPath});
+const _n = (c) => (Array.isArray(c) ? c.join(" ") : String(c)).replace(/'/g, "");
+const registry = require(${registryPath});
+
+const commands = [];
+runner.run = (command, opts = {}) => {
+  const normalized = _n(command);
+  commands.push({ command: normalized, env: opts.env || null });
+  if (normalized.includes("provider get hermes-provider")) {
+    return { status: 0, stdout: "Provider: hermes-provider", stderr: "" };
+  }
+  return { status: 0, stdout: "", stderr: "" };
+};
+runner.runCapture = (command) => {
+  if (_n(command).includes("inference") && _n(command).includes("get")) {
+    return [
+      "Gateway inference:",
+      "",
+      "  Route: inference.local",
+      "  Provider: hermes-provider",
+      "  Model: moonshotai/kimi-k2.6",
+      "  Version: 1",
+    ].join("\\n");
+  }
+  return "";
+};
+registry.updateSandbox = () => true;
+
+process.env.NOUS_API_KEY = "nous-host-secret";
+process.env.OPENAI_API_KEY = "openai-host-secret";
+process.env.NEMOCLAW_NON_INTERACTIVE = "1";
+
+const { setupInference } = require(${onboardPath});
+
+(async () => {
+  await setupInference("test-box", "moonshotai/kimi-k2.6", "hermes-provider", "https://inference-api.nousresearch.com/v1", "OPENAI_API_KEY", "oauth");
+  console.log(JSON.stringify(commands));
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+`;
+    fs.writeFileSync(scriptPath, script);
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: tmpDir,
+        PATH: `${fakeBin}:${process.env.PATH || ""}`,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const commands = parseStdoutJson<CommandEntry[]>(result.stdout);
+    assert.equal(commands.length, 3);
+    assert.match(commands[0].command, /gateway select nemoclaw/);
+    assert.match(commands[1].command, /provider get hermes-provider/);
+    assert.match(commands[2].command, /inference set --no-verify --provider hermes-provider/);
+    assert.ok(!commands.some((entry) => /provider (create|update)/.test(entry.command)));
+    assert.ok(!commands.some((entry) => entry.env?.NOUS_API_KEY || entry.env?.OPENAI_API_KEY));
+    assert.ok(
+      !commands.some((entry) => /nous-host-secret|openai-host-secret/.test(entry.command)),
+      "host credential values must not appear in argv",
+    );
+  });
+
+  it("reconciles a registered Hermes Provider when a fresh shell Nous key is selected", () => {
+    const repoRoot = path.join(import.meta.dirname, "..");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-hermes-update-"));
+    const fakeBin = path.join(tmpDir, "bin");
+    const scriptPath = path.join(tmpDir, "setup-hermes-update-check.js");
+    const onboardPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "onboard.js"));
+    const runnerPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "runner.js"));
+    const registryPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "state", "registry.js"));
+
+    fs.mkdirSync(fakeBin, { recursive: true });
+    fs.writeFileSync(path.join(fakeBin, "openshell"), "#!/usr/bin/env bash\nexit 0\n", {
+      mode: 0o755,
+    });
+
+    const script = String.raw`
+const runner = require(${runnerPath});
+const _n = (c) => (Array.isArray(c) ? c.join(" ") : String(c)).replace(/'/g, "");
+const registry = require(${registryPath});
+
+const commands = [];
+runner.run = (command, opts = {}) => {
+  const normalized = _n(command);
+  commands.push({ command: normalized, env: opts.env || null });
+  if (normalized.includes("provider get hermes-provider")) {
+    return { status: 0, stdout: "Provider: hermes-provider", stderr: "" };
+  }
+  return { status: 0, stdout: "", stderr: "" };
+};
+runner.runCapture = (command) => {
+  if (_n(command).includes("inference") && _n(command).includes("get")) {
+    return [
+      "Gateway inference:",
+      "",
+      "  Route: inference.local",
+      "  Provider: hermes-provider",
+      "  Model: moonshotai/kimi-k2.6",
+      "  Version: 1",
+    ].join("\\n");
+  }
+  return "";
+};
+registry.updateSandbox = () => true;
+
+process.env.NOUS_API_KEY = "nous-host-secret";
+delete process.env.OPENAI_API_KEY;
+process.env.NEMOCLAW_NON_INTERACTIVE = "1";
+
+const { setupInference } = require(${onboardPath});
+
+(async () => {
+  await setupInference(
+    "test-box",
+    "moonshotai/kimi-k2.6",
+    "hermes-provider",
+    "https://inference-api.nousresearch.com/v1",
+    "NOUS_API_KEY",
+    "api_key",
+  );
+  console.log(JSON.stringify(commands));
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+`;
+    fs.writeFileSync(scriptPath, script);
+
+    const result = spawnSync(process.execPath, [scriptPath], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: tmpDir,
+        PATH: `${fakeBin}:${process.env.PATH || ""}`,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const commands = parseStdoutJson<CommandEntry[]>(result.stdout);
+    const update = commands.find((entry) => /provider update hermes-provider/.test(entry.command));
+    assert.ok(update);
+    assert.match(update.command, /--credential NOUS_API_KEY/);
+    assert.equal(update.env?.NOUS_API_KEY, "nous-host-secret");
+    assert.ok(
+      !commands.some((entry) => /nous-host-secret/.test(entry.command)),
+      "shell credential value must not appear in argv",
+    );
+    assert.match(
+      commands.at(-1)?.command || "",
+      /inference set --no-verify --provider hermes-provider/,
+    );
   });
 
   it("configures Model Router as a host provider while sandboxes keep inference.local", () => {
@@ -3944,7 +4694,7 @@ const { setupInference } = require(${onboardPath});
       "utf-8",
     );
     const probeSource = fs.readFileSync(
-      path.join(import.meta.dirname, "..", "src", "lib", "http-probe.ts"),
+      path.join(import.meta.dirname, "..", "src", "lib", "adapters", "http", "probe.ts"),
       "utf-8",
     );
     const recoverySource = fs.readFileSync(
@@ -3952,7 +4702,7 @@ const { setupInference } = require(${onboardPath});
       "utf-8",
     );
 
-    assert.match(onboardSource, /http-probe/);
+    assert.match(onboardSource, /adapters\/http\/probe/);
     assert.match(probeSource, /return \["--connect-timeout", "10", "--max-time", "60"\];/);
     assert.match(recoverySource, /failure\.curlStatus === 2/);
     assert.match(recoverySource, /local curl invocation error/);
@@ -4041,6 +4791,24 @@ const { setupInference } = require(${onboardPath});
     );
   });
 
+  it("records gateway completion when a fresh onboard reuses an existing gateway", () => {
+    const source = fs.readFileSync(
+      path.join(import.meta.dirname, "..", "src", "lib", "onboard.ts"),
+      "utf-8",
+    );
+    const reusePos = source.indexOf('skippedStepMessage("gateway", "running", "reuse")');
+    const nextBranchPos = source.indexOf("} else {", reusePos);
+    const reuseBlock = source.slice(reusePos, nextBranchPos);
+
+    assert.ok(reusePos !== -1, "gateway reuse branch not found");
+    assert.ok(nextBranchPos !== -1, "gateway reuse branch end not found");
+    assert.match(
+      reuseBlock,
+      /onboardSession\.markStepComplete\("gateway"\)/,
+      "reused gateway must be persisted so a later resume can skip it",
+    );
+  });
+
   it("starts the sandbox step before prompting for the sandbox name", () => {
     const source = fs.readFileSync(
       path.join(import.meta.dirname, "..", "src", "lib", "onboard.ts"),
@@ -4051,7 +4819,7 @@ const { setupInference } = require(${onboardPath});
       source,
       // #2753: sandboxName is intentionally absent from the options here so
       // the session does not record a name before createSandbox completes.
-      /startRecordedStep\("sandbox", \{ provider, model \}\);\s*const recordedMessagingChannels = getRecordedMessagingChannelsForResume\(resume, session\);[\s\S]*?selectedMessagingChannels = recordedMessagingChannels;[\s\S]*?selectedMessagingChannels = await setupMessagingChannels\(\);[\s\S]*?const messagingChannelConfig = readMessagingChannelConfigFromEnv\(\);[\s\S]*?onboardSession\.updateSession\(\(current[^)]*\) => \{\s*current\.messagingChannels = selectedMessagingChannels;\s*current\.messagingChannelConfig = messagingChannelConfig;\s*return current;\s*\}\);[\s\S]*?sandboxName = await createSandbox\(\s*gpu,\s*model,\s*provider,\s*preferredInferenceApi,\s*sandboxName,\s*nextWebSearchConfig,\s*selectedMessagingChannels,\s*fromDockerfile,\s*agent,\s*opts\.controlUiPort \|\| null,\s*gpuPassthrough,\s*\);/,
+      /startRecordedStep\("sandbox", \{ provider, model \}\);\s*const recordedMessagingChannels = getRecordedMessagingChannelsForResume\(resume, session\);[\s\S]*?selectedMessagingChannels = recordedMessagingChannels;[\s\S]*?selectedMessagingChannels = await setupMessagingChannels\(\);[\s\S]*?const messagingChannelConfig = readMessagingChannelConfigFromEnv\(\);[\s\S]*?onboardSession\.updateSession\(\(current[^)]*\) => \{\s*current\.messagingChannels = selectedMessagingChannels;\s*current\.messagingChannelConfig = messagingChannelConfig;\s*return current;\s*\}\);[\s\S]*?sandboxName = await createSandbox\(\s*gpu,\s*model,\s*provider,\s*preferredInferenceApi,\s*sandboxName,\s*nextWebSearchConfig,\s*selectedMessagingChannels,\s*fromDockerfile,\s*agent,\s*opts\.controlUiPort \|\| null,\s*sandboxGpuConfig,\s*\);/,
     );
   });
 
@@ -4061,10 +4829,10 @@ const { setupInference } = require(${onboardPath});
       "utf-8",
     );
 
-    assert.match(source, /const detectedNvidiaGpu = gpu\?\.type === "nvidia";/);
+    assert.match(source, /const explicitSandboxGpuFlag = resolveSandboxGpuFlagFromOptions\(opts\);/);
     assert.match(
       source,
-      /const gpuPassthrough = optedOutGpuPassthrough[\s\S]*\? false[\s\S]*\? true[\s\S]*: detectedNvidiaGpu;/,
+      /const gpuPassthrough = sandboxGpuConfig\.sandboxGpuEnabled;/,
     );
     assert.match(source, /Use --no-gpu to opt out/);
   });
@@ -4115,7 +4883,7 @@ const { setupInference } = require(${onboardPath});
     assert.match(source, /skippedStepMessage\("openclaw", sandboxName\)/);
     assert.match(
       source,
-      /skippedStepMessage\("policies", \(recordedPolicyPresets \|\| \[\]\)\.join\(", "\)\)/,
+      /skippedStepMessage\("policies", recordedPolicyPresetsForSupport\.join\(", "\)\)/,
     );
   });
 
@@ -4130,17 +4898,25 @@ const { setupInference } = require(${onboardPath});
       // #2753: a stale `session.sandboxName` from an interrupted onboard
       // must not override a fresh `--name` / NEMOCLAW_SANDBOX_NAME, so the
       // session value participates only when its sandbox step completed.
-      /const recordedSandboxName =\s*session\?\.steps\?\.sandbox\?\.status === "complete" \? session\?\.sandboxName \|\| null : null;\s*let sandboxName = recordedSandboxName \|\| requestedSandboxName \|\| null;\s*if \(sandboxName && RESERVED_SANDBOX_NAMES\.has\(sandboxName\)\) \{[\s\S]*?process\.exit\(1\);\s*\}/,
+      /const recordedSandboxName =\s*session\?\.steps\?\.sandbox\?\.status === "complete" \? session\?\.sandboxName \|\| null : null;[\s\S]*?let sandboxName = recordedSandboxName \|\| requestedSandboxName \|\| null;\s*if \(sandboxName && RESERVED_SANDBOX_NAMES\.has\(sandboxName\)\) \{[\s\S]*?process\.exit\(1\);\s*\}/,
     );
+  });
+  it("reserves update as a sandbox name because it is a global command", () => {
+    const source = fs.readFileSync(
+      path.join(import.meta.dirname, "..", "src", "lib", "onboard.ts"),
+      "utf-8",
+    );
+
+    assert.match(source, /const RESERVED_SANDBOX_NAMES = new Set\([\s\S]*?"update"[\s\S]*?\]\);/);
   });
   it("delegates sandbox-create progress streaming to the extracted helper module", () => {
     const onboardSource = fs.readFileSync(
       path.join(import.meta.dirname, "..", "src", "lib", "onboard.ts"),
       "utf-8",
     );
-    const { streamSandboxCreate } = require("../dist/lib/sandbox-create-stream");
+    const { streamSandboxCreate } = require("../dist/lib/sandbox/create-stream");
 
-    assert.match(onboardSource, /sandbox-create-stream/);
+    assert.match(onboardSource, /sandbox\/create-stream/);
     assert.equal(typeof streamSandboxCreate, "function");
   });
 
@@ -5089,7 +5865,7 @@ const { createSandbox } = require(${onboardPath});
       assert.deepEqual(payload.registeredPolicies, ["slack"]);
       assert.deepEqual(payload.slackBinaryPaths, [
         "/usr/local/bin/hermes",
-        "/usr/bin/python3.11",
+        "/usr/bin/python3*",
         "/opt/hermes/.venv/bin/python",
       ]);
       assert.ok(
@@ -6096,7 +6872,7 @@ childProcess.spawn = fakeSpawn;
 // childProcess object above does not reach it. Patch the cached module
 // directly so streamSandboxCreate (called by createSandbox) doesn't spawn
 // a real bash process that tries to hit a live gateway.
-const sandboxCreateStreamMod = require(${JSON.stringify(path.join(repoRoot, "dist", "lib", "sandbox-create-stream.js"))});
+const sandboxCreateStreamMod = require(${JSON.stringify(path.join(repoRoot, "dist", "lib", "sandbox", "create-stream.js"))});
 const _origStreamCreate = sandboxCreateStreamMod.streamSandboxCreate;
 sandboxCreateStreamMod.streamSandboxCreate = (command, env, options = {}) => {
   return _origStreamCreate(command, env, { ...options, spawnImpl: fakeSpawn });
@@ -7175,7 +7951,7 @@ const { createSandbox } = require(${onboardPath});
       const scriptPath = path.join(tmpDir, "messaging-noninteractive.js");
       const onboardPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "onboard.js"));
       const runnerPath = JSON.stringify(path.join(repoRoot, "dist", "lib", "runner.js"));
-      const httpProbePath = JSON.stringify(path.join(repoRoot, "dist", "lib", "http-probe.js"));
+      const httpProbePath = JSON.stringify(path.join(repoRoot, "dist", "lib", "adapters", "http", "probe.js"));
 
       fs.mkdirSync(fakeBin, { recursive: true });
       fs.writeFileSync(path.join(fakeBin, "openshell"), "#!/usr/bin/env bash\nexit 0\n", {
@@ -8400,8 +9176,8 @@ const { createSandbox } = require(${onboardPath});
       path.join(import.meta.dirname, "..", "src", "lib", "onboard.ts"),
       "utf-8",
     );
-    const pullPos = source.indexOf("pullAndResolveBaseImageDigest()");
-    assert.ok(pullPos !== -1, "pullAndResolveBaseImageDigest() call not found in onboard.ts");
+    const pullPos = source.search(/const resolved = pullAndResolveBaseImageDigest\s*\(/);
+    assert.ok(pullPos !== -1, "pullAndResolveBaseImageDigest call not found in onboard.ts");
     const patchPos = source.indexOf("patchStagedDockerfile(", pullPos);
     assert.ok(
       patchPos > pullPos,

@@ -17,10 +17,10 @@ import type { CommandDef } from "./command-registry";
 
 describe("command-registry", () => {
   describe("COMMANDS array", () => {
-    it("should contain exactly 52 commands", () => {
-      // 23 global (18 visible + 5 hidden help/version aliases)
-      // 29 sandbox (23 visible + 6 hidden shields/config)
-      expect(COMMANDS).toHaveLength(52);
+    it("should contain exactly 57 commands", () => {
+      // 25 global (20 visible + 5 hidden help/version aliases)
+      // 32 sandbox (26 visible + 6 hidden shields/config)
+      expect(COMMANDS).toHaveLength(57);
     });
 
     it("should have no duplicate usage strings", () => {
@@ -39,9 +39,9 @@ describe("command-registry", () => {
   });
 
   describe("globalCommands()", () => {
-    it("should return exactly 23 entries", () => {
-      // 18 visible + 5 hidden (help, --help, -h, --version, -v)
-      expect(globalCommands()).toHaveLength(23);
+    it("should return exactly 25 entries", () => {
+      // 20 visible + 5 hidden (help, --help, -h, --version, -v)
+      expect(globalCommands()).toHaveLength(25);
     });
 
     it("every entry has scope global", () => {
@@ -52,9 +52,9 @@ describe("command-registry", () => {
   });
 
   describe("sandboxCommands()", () => {
-    it("should return exactly 29 entries", () => {
-      // 23 visible + 6 hidden (shields×3 + config get/set/rotate-token)
-      expect(sandboxCommands()).toHaveLength(29);
+    it("should return exactly 32 entries", () => {
+      // 26 visible + 6 hidden (shields×3 + config get/set/rotate-token)
+      expect(sandboxCommands()).toHaveLength(32);
     });
 
     it("every entry has scope sandbox", () => {
@@ -65,10 +65,10 @@ describe("command-registry", () => {
   });
 
   describe("visibleCommands()", () => {
-    it("should exclude 11 hidden commands (41 visible)", () => {
+    it("should exclude 11 hidden commands (46 visible)", () => {
       // 5 hidden global (help, --help, -h, --version, -v) +
       // 6 hidden sandbox (shields×3, config get/set/rotate-token)
-      expect(visibleCommands()).toHaveLength(41);
+      expect(visibleCommands()).toHaveLength(46);
     });
 
     it("no visible command has hidden=true", () => {
@@ -146,10 +146,11 @@ describe("command-registry", () => {
   });
 
   describe("globalCommandTokens()", () => {
-    it("returns the exact set of 20 tokens matching the old GLOBAL_COMMANDS", () => {
+    it("returns the exact set of 22 tokens matching the global dispatch commands", () => {
       const tokens = globalCommandTokens();
       const expected = new Set([
         "onboard",
+        "update",
         "list",
         "deploy",
         "setup",
@@ -164,6 +165,7 @@ describe("command-registry", () => {
         "backup-all",
         "upgrade-sandboxes",
         "gc",
+        "inference",
         "help",
         "--help",
         "-h",
@@ -175,9 +177,9 @@ describe("command-registry", () => {
   });
 
   describe("sandboxActionTokens()", () => {
-    it("returns exactly 18 unique action tokens including empty string", () => {
+    it("returns exactly 21 unique action tokens including empty string", () => {
       const tokens = sandboxActionTokens();
-      expect(tokens).toHaveLength(18);
+      expect(tokens).toHaveLength(21);
       // Must contain every first-level sandbox action plus the empty default action.
       const expected = new Set([
         "connect",
@@ -187,6 +189,9 @@ describe("command-registry", () => {
         "policy-add",
         "policy-remove",
         "policy-list",
+        "hosts-add",
+        "hosts-list",
+        "hosts-remove",
         "destroy",
         "skill",
         "rebuild",

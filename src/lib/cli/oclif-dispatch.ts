@@ -100,6 +100,7 @@ const GLOBAL_ROUTES: Readonly<Record<string, string>> = {
   status: "status",
   debug: "debug",
   uninstall: "uninstall",
+  update: "update",
   list: "list",
   "backup-all": "backup-all",
   "upgrade-sandboxes": "upgrade-sandboxes",
@@ -114,6 +115,17 @@ export function resolveGlobalOclifDispatch(cmd: string, args: string[]): Dispatc
     const sub = args[0];
     if (sub === "start" || sub === "stop") return oclif(`tunnel:${sub}`, args.slice(1));
     return { kind: "usageError", lines: ["tunnel <start|stop>"] };
+  }
+
+  if (cmd === "inference") {
+    const sub = args[0];
+    if (sub === "set") return oclif("inference:set", args.slice(1));
+    return {
+      kind: "usageError",
+      lines: [
+        "inference set --provider <provider> --model <model> [--sandbox <name>] [--no-verify]",
+      ],
+    };
   }
 
   if (cmd === "credentials") {

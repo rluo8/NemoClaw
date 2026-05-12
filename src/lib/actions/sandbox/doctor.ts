@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/* v8 ignore start -- exercised through CLI subprocess doctor tests. */
 
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -21,7 +20,7 @@ import type { SandboxEntry } from "../../state/registry";
 import { resolveOpenshell } from "../../adapters/openshell/resolve";
 import { ROOT } from "../../runner";
 import { parseLiveSandboxNames } from "../../runtime-recovery";
-import * as sandboxVersion from "../../sandbox-version";
+import * as sandboxVersion from "../../sandbox/version";
 import * as shields from "../../shields";
 import { buildStatusCommandDeps } from "../../status-command-deps";
 import { B, D, G, R, RD, YW } from "../../cli/terminal-style";

@@ -12,10 +12,20 @@ describe("resolveGlobalOclifDispatch", () => {
       commandId: "list",
       args: ["--json"],
     });
+    expect(resolveGlobalOclifDispatch("update", ["--check"])).toEqual({
+      kind: "oclif",
+      commandId: "update",
+      args: ["--check"],
+    });
     expect(resolveGlobalOclifDispatch("tunnel", ["start"])).toEqual({
       kind: "oclif",
       commandId: "tunnel:start",
       args: [],
+    });
+    expect(resolveGlobalOclifDispatch("inference", ["set", "--provider", "nvidia-prod"])).toEqual({
+      kind: "oclif",
+      commandId: "inference:set",
+      args: ["--provider", "nvidia-prod"],
     });
     expect(resolveGlobalOclifDispatch("--version", [])).toEqual({
       kind: "oclif",
@@ -33,6 +43,12 @@ describe("resolveGlobalOclifDispatch", () => {
     expect(resolveGlobalOclifDispatch("tunnel", ["restart"])).toEqual({
       kind: "usageError",
       lines: ["tunnel <start|stop>"],
+    });
+    expect(resolveGlobalOclifDispatch("inference", ["get"])).toEqual({
+      kind: "usageError",
+      lines: [
+        "inference set --provider <provider> --model <model> [--sandbox <name>] [--no-verify]",
+      ],
     });
     expect(resolveGlobalOclifDispatch("credentials", ["bogus"])).toEqual({
       kind: "unknownSubcommand",
