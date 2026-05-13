@@ -185,14 +185,6 @@ type OnboardTestInternals = {
   ) => string;
   providerNameToOptionKey: (name?: string | null) => string | null;
   parsePolicyPresetEnv: (value: string | null) => string[];
-  shouldCarryPreviousPolicies: (
-    previousPolicies: string[] | null | undefined,
-    options?: {
-      nonInteractive?: boolean;
-      envPolicyPresetsRaw?: string;
-      envPolicyModeRaw?: string;
-    },
-  ) => boolean;
   patchStagedDockerfile: ShimFn<void>;
   pullAndResolveBaseImageDigest: () => { digest: string | null; ref: string } | null;
   SANDBOX_BASE_IMAGE: string;
@@ -328,7 +320,6 @@ const {
   normalizeProviderBaseUrl,
   providerNameToOptionKey,
   parsePolicyPresetEnv,
-  shouldCarryPreviousPolicies,
   patchStagedDockerfile,
   pullAndResolveBaseImageDigest,
   SANDBOX_BASE_IMAGE,
@@ -929,56 +920,6 @@ network_policies:
     expect(getSuggestedPolicyPresets({ provider: "openai-api" })).not.toContain("local-inference");
     expect(getSuggestedPolicyPresets({ provider: null })).not.toContain("local-inference");
     expect(getSuggestedPolicyPresets({})).not.toContain("local-inference");
-  });
-
-  describe("shouldCarryPreviousPolicies (#2675)", () => {
-    it("drops previous policies when NEMOCLAW_POLICY_PRESETS overrides on recreate", () => {
-      expect(
-        shouldCarryPreviousPolicies(["npm"], {
-          nonInteractive: true,
-          envPolicyPresetsRaw: "pypi",
-        }),
-      ).toBe(false);
-    });
-
-    it("ignores env var in interactive mode (previous list still wins)", () => {
-      expect(
-        shouldCarryPreviousPolicies(["npm"], {
-          nonInteractive: false,
-          envPolicyPresetsRaw: "pypi",
-        }),
-      ).toBe(true);
-    });
-
-    it("drops previous policies when NEMOCLAW_POLICY_MODE=skip", () => {
-      expect(
-        shouldCarryPreviousPolicies(["npm"], {
-          nonInteractive: true,
-          envPolicyPresetsRaw: "",
-          envPolicyModeRaw: "skip",
-        }),
-      ).toBe(false);
-    });
-
-    it("drops previous policies when NEMOCLAW_POLICY_MODE=custom forces explicit selection", () => {
-      expect(
-        shouldCarryPreviousPolicies(["npm"], {
-          nonInteractive: true,
-          envPolicyPresetsRaw: "",
-          envPolicyModeRaw: "custom",
-        }),
-      ).toBe(false);
-    });
-
-    it("carries previous policies when NEMOCLAW_POLICY_MODE=suggested (implicit)", () => {
-      expect(
-        shouldCarryPreviousPolicies(["npm"], {
-          nonInteractive: true,
-          envPolicyPresetsRaw: "",
-          envPolicyModeRaw: "suggested",
-        }),
-      ).toBe(true);
-    });
   });
 
   describe("computeSetupPresetSuggestions", () => {
