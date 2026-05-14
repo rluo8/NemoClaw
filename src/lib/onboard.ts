@@ -351,6 +351,7 @@ import type {
 } from "./onboard/types";
 import { listChannels } from "./sandbox/channels";
 import { streamGatewayStart } from "./onboard/gateway";
+import { reportGpuPassthroughRecovery } from "./onboard/gpu-recovery";
 import type { StreamSandboxCreateResult } from "./sandbox/create-stream";
 import type { SandboxEntry } from "./state/registry";
 import type { BackupResult } from "./state/sandbox";
@@ -10316,9 +10317,7 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
       const gpuOutput = String(gpuCheck.stdout || "").trim();
       const gatewayHasGpu = gpuCheck.status === 0 && gpuOutput !== "null" && gpuOutput !== "[]";
       if (!gatewayHasGpu) {
-        console.error("  Existing gateway was started without GPU passthrough.");
-        console.error("  To enable GPU, destroy the existing sandbox and gateway, then re-onboard:");
-        console.error(`    nemoclaw <name> destroy --yes && nemoclaw onboard --gpu`);
+        reportGpuPassthroughRecovery(console.error);
         process.exit(1);
       }
     }
