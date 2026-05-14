@@ -893,7 +893,8 @@ network_policies:
     assert.match(script, /https:\/\/inference\.local\/v1/);
     assert.match(script, /apiKey.*unused/);
     assert.match(script, /agents\.defaults\.model\.primary/);
-    assert.match(script, /curl[\s\S]*\/chat\/completions/);
+    assert.match(script, /INFERENCE_URL=.*\/chat\/completions/);
+    assert.match(script, /curl[\s\S]*"\$INFERENCE_URL"/);
     assert.doesNotMatch(script, /COMPATIBLE_API_KEY/);
     assert.doesNotMatch(script, /api\.deepinfra\.com/);
   });
