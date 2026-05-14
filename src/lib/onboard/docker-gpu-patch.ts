@@ -658,7 +658,7 @@ function waitForOpenShellSandboxExec(
   while (Date.now() <= deadline) {
     const result = deps.runOpenshell(
       ["sandbox", "exec", "-n", sandboxName, "--", "true"],
-      { ignoreError: true, timeout: DOCKER_GPU_PATCH_TIMEOUT_MS },
+      { ignoreError: true, suppressOutput: true, timeout: DOCKER_GPU_PATCH_TIMEOUT_MS },
     );
     if (isZeroStatus(result)) return true;
     d.sleep(2);

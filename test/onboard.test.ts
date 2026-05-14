@@ -60,7 +60,7 @@ type OnboardTestInternals = {
     },
     options?: { suppressGpuFlag?: boolean },
   ) => string[];
-  buildDirectGpuPolicyYaml: (basePolicy: string) => string;
+  buildDirectGpuPolicyYaml: (basePolicy: string, options?: { procReadWrite?: boolean }) => string;
   buildDirectSandboxGpuProofCommands: (sandboxName: string) => { label: string; args: string[] }[];
   classifySandboxCreateFailure: (output?: string) => { kind: string; uploadedToGateway: boolean };
   compactText: (value?: string) => string;
@@ -446,6 +446,22 @@ describe("onboard helpers", () => {
       expect(baseDoc.filesystem_policy.read_only).toContain("/proc");
       expect(gpuDoc.filesystem_policy.read_only).not.toContain("/proc");
       expect(gpuDoc.filesystem_policy.read_write).not.toContain("/proc");
+      expect(gpuDoc.filesystem_policy.read_write).not.toContain("/proc/self/task/*/comm");
+    },
+  );
+
+  it(
+    "adds /proc read-write when Docker GPU patch must own GPU enrichment",
+    () => {
+      const basePolicy = fs.readFileSync(
+        path.join(repoRoot, "nemoclaw-blueprint", "policies", "openclaw-sandbox.yaml"),
+        "utf-8",
+      );
+      const gpuPolicy = buildDirectGpuPolicyYaml(basePolicy, { procReadWrite: true });
+      const gpuDoc = YAML.parse(gpuPolicy);
+
+      expect(gpuDoc.filesystem_policy.read_only).not.toContain("/proc");
+      expect(gpuDoc.filesystem_policy.read_write).toContain("/proc");
       expect(gpuDoc.filesystem_policy.read_write).not.toContain("/proc/self/task/*/comm");
     },
   );
@@ -5505,7 +5521,7 @@ ${webSearchVerifySource}`;
       "utf-8",
     );
 
-    assert.match(source, /useDockerGpuPatch = dockerGpuSandboxCreate\.shouldUseDockerGpuPatchForCreate/);
+    assert.match(source, /resolveDockerGpuSandboxCreatePlan\(effectiveSandboxGpuConfig/);
     assert.match(source, /suppressGpuFlag: useDockerGpuPatch/);
     assert.match(source, /maybeApplyDuringCreate/);
     assert.match(source, /printDockerGpuReadinessFailure/);

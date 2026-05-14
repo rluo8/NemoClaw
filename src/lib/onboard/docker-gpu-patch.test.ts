@@ -396,7 +396,7 @@ describe("docker-gpu-patch", () => {
     );
     expect(runOpenshell).toHaveBeenCalledWith(
       ["sandbox", "exec", "-n", "alpha", "--", "true"],
-      expect.objectContaining({ ignoreError: true }),
+      expect.objectContaining({ ignoreError: true, suppressOutput: true }),
     );
     const dockerRmCalls = dockerRm.mock.calls as unknown[][];
     const backupRmCall = dockerRmCalls.findIndex((call) =>
