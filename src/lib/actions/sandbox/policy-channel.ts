@@ -410,9 +410,10 @@ export async function addSandboxChannel(sandboxName: string, args: string[] = []
     console.error(`  Valid channels: ${knownChannelNames().join(", ")}`);
     process.exit(1);
   }
+  const canonical = channelArg.trim().toLowerCase();
 
   if (dryRun) {
-    console.log(`  --dry-run: would enable channel '${channelArg}' for '${sandboxName}'.`);
+    console.log(`  --dry-run: would enable channel '${canonical}' for '${sandboxName}'.`);
     return;
   }
 
@@ -428,7 +429,7 @@ export async function addSandboxChannel(sandboxName: string, args: string[] = []
       continue;
     }
     if (isNonInteractive()) {
-      console.error(`  Missing ${envKey} for channel '${channelArg}'.`);
+      console.error(`  Missing ${envKey} for channel '${canonical}'.`);
       console.error(
         `  Set ${envKey} in the environment or via '${CLI_NAME} credentials' before running in non-interactive mode.`,
       );
@@ -450,9 +451,39 @@ export async function addSandboxChannel(sandboxName: string, args: string[] = []
   // discard the change. Pre-fix this was safe because saveCredential()
   // wrote credentials.json; with env-only persistence, exiting before
   // the rebuild used to drop the queued token.
-  await applyChannelAddToGatewayAndRegistry(sandboxName, channelArg, acquired);
-  console.log(`  ${G}✓${R} Registered ${channelArg} bridge with the OpenShell gateway.`);
-  await promptAndRebuild(sandboxName, `add '${channelArg}'`);
+  await applyChannelAddToGatewayAndRegistry(sandboxName, canonical, acquired);
+  console.log(`  ${G}✓${R} Registered ${canonical} bridge with the OpenShell gateway.`);
+
+  applyChannelPresetIfAvailable(sandboxName, canonical);
+
+  await promptAndRebuild(sandboxName, `add '${canonical}'`);
+}
+
+// Must run before promptAndRebuild — the rebuild's backup manifest only
+// captures presets already applied (#3437). Without this, channel bridges
+// boot without egress to their upstream API after rebuild.
+function applyChannelPresetIfAvailable(sandboxName: string, channelName: string): void {
+  const builtinPresets = new Set(policies.listPresets().map((p) => p.name));
+  if (!builtinPresets.has(channelName)) {
+    return;
+  }
+  try {
+    const applied = policies.applyPreset(sandboxName, channelName);
+    if (!applied) {
+      console.error(
+        `  ${YW}⚠${R} Channel '${channelName}' bridge registered but its policy preset failed to apply.`,
+      );
+      console.error(
+        `    Re-apply manually after rebuild with: ${CLI_NAME} ${sandboxName} policy-add ${channelName}`,
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`  ${YW}⚠${R} Failed to apply '${channelName}' policy preset: ${msg}`);
+    console.error(
+      `    Re-apply manually after rebuild with: ${CLI_NAME} ${sandboxName} policy-add ${channelName}`,
+    );
+  }
 }
 
 export async function removeSandboxChannel(sandboxName: string, args: string[] = []): Promise<void> {
@@ -470,9 +501,10 @@ export async function removeSandboxChannel(sandboxName: string, args: string[] =
     console.error(`  Valid channels: ${knownChannelNames().join(", ")}`);
     process.exit(1);
   }
+  const canonical = channelArg.trim().toLowerCase();
 
   if (dryRun) {
-    console.log(`  --dry-run: would remove channel '${channelArg}' for '${sandboxName}'.`);
+    console.log(`  --dry-run: would remove channel '${canonical}' for '${sandboxName}'.`);
     return;
   }
 
@@ -483,11 +515,11 @@ export async function removeSandboxChannel(sandboxName: string, args: string[] =
   // already "removed" from the user's perspective.
   await applyChannelRemoveToGatewayAndRegistry(
     sandboxName,
-    channelArg,
+    canonical,
     getChannelTokenKeys(channel),
   );
-  console.log(`  ${G}✓${R} Removed ${channelArg} bridge from the OpenShell gateway.`);
-  await promptAndRebuild(sandboxName, `remove '${channelArg}'`);
+  console.log(`  ${G}✓${R} Removed ${canonical} bridge from the OpenShell gateway.`);
+  await promptAndRebuild(sandboxName, `remove '${canonical}'`);
 }
 
 async function sandboxChannelsSetEnabled(

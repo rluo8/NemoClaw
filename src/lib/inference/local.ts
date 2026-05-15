@@ -6,15 +6,16 @@
  * health checks, and command generators for vLLM and Ollama.
  */
 
-import type { CurlProbeResult } from "../adapters/http/probe";
-import { runCurlProbe } from "../adapters/http/probe";
 import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
+import type { CurlProbeResult } from "../adapters/http/probe";
+import { runCurlProbe } from "../adapters/http/probe";
+import { buildSubprocessEnv } from "../subprocess-env";
 
 const { shellQuote, runCapture } = require("../runner");
 
-import { VLLM_PORT, OLLAMA_PORT, OLLAMA_PROXY_PORT } from "../core/ports";
+import { OLLAMA_PORT, OLLAMA_PROXY_PORT, VLLM_PORT } from "../core/ports";
 import { sleepSeconds } from "../core/wait";
 
 const { isWsl } = require("../platform");
@@ -95,6 +96,11 @@ export function setResolvedOllamaHost(host: string): void {
 
 export interface GpuInfo {
   totalMemoryMB: number;
+  // Optional, narrows the GpuDetection union from inference/nim.ts. Used to
+  // gate the large-Ollama-model defaults so a partially-identified device
+  // does not get sized as if it were confirmed NVIDIA / Apple Silicon
+  // (#3510).
+  type?: string;
 }
 
 export interface ValidationResult {
@@ -131,6 +137,12 @@ export interface LocalProviderHealthStatus {
 export interface LocalProviderHealthProbeOptions {
   runCurlProbeImpl?: (argv: string[]) => CurlProbeResult;
   /**
+   * Lets callers that perform their own Ollama auth-proxy check avoid the
+   * legacy inline proxy subprobe. The inline subprobe is retained for status
+   * rendering paths that still need a combined backend/proxy result.
+   */
+  skipOllamaAuthProxySubprobe?: boolean;
+  /**
    * Reads the persisted Ollama auth-proxy bearer token. Injectable for tests.
    * Default reads from `~/.nemoclaw/ollama-proxy-token` (written by
    * inference/ollama/proxy.ts during onboard).
@@ -149,6 +161,10 @@ function defaultLoadOllamaProxyToken(): string | null {
     /* ignore — null means "no auth-proxy onboarded; skip the subprobe" */
   }
   return null;
+}
+
+function runLocalCurlProbe(argv: string[]): CurlProbeResult {
+  return runCurlProbe(argv, { env: buildSubprocessEnv(), replaceEnv: true });
 }
 
 export function validateOllamaPortConfiguration(): ValidationResult {
@@ -280,7 +296,7 @@ export function probeOllamaAuthProxyHealth(
     return null;
   }
   const endpoint = `http://127.0.0.1:${OLLAMA_PROXY_PORT}/api/tags`;
-  const runCurlProbeImpl = options.runCurlProbeImpl ?? runCurlProbe;
+  const runCurlProbeImpl = options.runCurlProbeImpl ?? runLocalCurlProbe;
   const result = runCurlProbeImpl([
     "-sS",
     "--connect-timeout",
@@ -339,7 +355,7 @@ export function probeLocalProviderHealth(
     return null;
   }
 
-  const runCurlProbeImpl = options.runCurlProbeImpl ?? runCurlProbe;
+  const runCurlProbeImpl = options.runCurlProbeImpl ?? runLocalCurlProbe;
   const result = runCurlProbeImpl(["-sS", "--connect-timeout", "3", "--max-time", "5", endpoint]);
 
   // Per #3265 the status line is renamed `Inference (<backend>):` for local
@@ -350,7 +366,7 @@ export function probeLocalProviderHealth(
     provider === "vllm-local" ? "vllm backend" : undefined;
 
   const subprobes: LocalProviderHealthStatus[] = [];
-  if (provider === "ollama-local") {
+  if (provider === "ollama-local" && !options.skipOllamaAuthProxySubprobe) {
     const proxyProbe = probeOllamaAuthProxyHealth(options);
     if (proxyProbe) subprobes.push(proxyProbe);
   }
@@ -619,9 +635,22 @@ export function getOllamaModelOptions(runCaptureImpl?: RunCaptureFn): string[] {
   return parseOllamaList(listOutput);
 }
 
+function isLargeOllamaCapableGpu(gpu: GpuInfo | null): boolean {
+  // Only confirmed-NVIDIA and Apple-Silicon devices get the large-model
+  // default.  Other detection outcomes (null, missing `type`, or a partial
+  // result that fell through the NVIDIA path with type set to something
+  // else) fall back to the smaller model so we never download a 22 GB
+  // model onto a host whose acceleration is unconfirmed (#3510).
+  return (
+    !!gpu &&
+    (gpu.type === "nvidia" || gpu.type === "apple") &&
+    gpu.totalMemoryMB >= LARGE_OLLAMA_MIN_MEMORY_MB
+  );
+}
+
 export function getBootstrapOllamaModelOptions(gpu: GpuInfo | null): string[] {
   const options = [SMALL_OLLAMA_MODEL];
-  if (gpu && gpu.totalMemoryMB >= LARGE_OLLAMA_MIN_MEMORY_MB) {
+  if (isLargeOllamaCapableGpu(gpu)) {
     options.push(DEFAULT_OLLAMA_MODEL);
     options.push(QWEN3_6_OLLAMA_MODEL);
   }
@@ -634,7 +663,7 @@ export function getDefaultOllamaModel(
 ): string {
   const models = getOllamaModelOptions(runCaptureImpl);
   if (models.length === 0) {
-    if (gpu && gpu.totalMemoryMB >= LARGE_OLLAMA_MIN_MEMORY_MB) {
+    if (isLargeOllamaCapableGpu(gpu)) {
       return QWEN3_6_OLLAMA_MODEL;
     }
     return SMALL_OLLAMA_MODEL;
