@@ -102,12 +102,12 @@ function captureOutput(result: SpawnSyncReturns<string>, opts: CaptureOpenshellO
   return `${result.stdout || ""}${shouldIncludeStderr(opts) ? result.stderr || "" : ""}`.trim();
 }
 
-function rawStreams(
-  stdout: string | undefined,
-  stderr: string | undefined,
+function maybeCapturedStreams(
+  stdout: string,
+  stderr: string,
   opts: CaptureOpenshellOptions,
 ): Pick<CaptureOpenshellResult, "stdout" | "stderr"> {
-  return opts.includeStreams ? { stdout: stdout || "", stderr: stderr || "" } : {};
+  return opts.includeStreams === true ? { stdout, stderr } : {};
 }
 
 function timeoutError(binary: string, args: string[], timeout: number): NodeJS.ErrnoException {
@@ -180,7 +180,7 @@ export function captureOpenshellCommand(
       return {
         status: result.status,
         output: captureOutput(result, opts),
-        ...rawStreams(result.stdout, result.stderr, opts),
+        ...maybeCapturedStreams(result.stdout || "", result.stderr || "", opts),
         error: result.error,
         signal: result.signal,
       };
@@ -190,7 +190,7 @@ export function captureOpenshellCommand(
   return {
     status: result.status ?? 1,
     output: captureOutput(result, opts),
-    ...rawStreams(result.stdout, result.stderr, opts),
+    ...maybeCapturedStreams(result.stdout || "", result.stderr || "", opts),
   };
 }
 
@@ -253,7 +253,7 @@ export function captureOpenshellCommandAsync(
       resolve({
         status: status ?? (timedOut ? null : 1),
         output: buildOutput(),
-        ...rawStreams(stdout, stderr, opts),
+        ...maybeCapturedStreams(stdout, stderr, opts),
         ...(error ? { error } : {}),
         signal,
       });

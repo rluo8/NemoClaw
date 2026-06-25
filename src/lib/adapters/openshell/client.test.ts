@@ -89,7 +89,7 @@ describe("openshell helpers", () => {
     expect(result).toEqual({ status: 1, output: "hello" });
   });
 
-  it("can expose raw stdout and stderr without changing the filtered output", () => {
+  it("preserves separated sync streams when includeStreams is true while output honors ignoreError", () => {
     const result = captureOpenshellCommand("openshell", ["status"], {
       ignoreError: true,
       includeStreams: true,
@@ -256,6 +256,25 @@ describe("openshell helpers", () => {
     );
 
     expect(result).toEqual({ status: 1, output: "hello\nboom", signal: null });
+  });
+
+  it("preserves separated async streams when includeStreams is true", async () => {
+    const result = await captureOpenshellCommandAsync(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write('hello\\n'); process.stderr.write('boom\\n'); process.exitCode = 1;",
+      ],
+      { ignoreError: true, includeStreams: true },
+    );
+
+    expect(result).toEqual({
+      status: 1,
+      output: "hello",
+      stdout: "hello\n",
+      stderr: "boom\n",
+      signal: null,
+    });
   });
 
   it("uses the injected exit handler on failure", () => {
