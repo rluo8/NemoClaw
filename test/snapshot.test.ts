@@ -1279,7 +1279,11 @@ if (cmd.includes("tar -cf -")) {
   process.exit(r.status || 0);
 }
 if (cmd.includes("tar --no-same-owner -xf -")) {
-  fs.readFileSync(0); // drain the piped restore tarball, then succeed
+  // drain the piped restore tarball in chunks (no full-stream buffering)
+  const buf = Buffer.alloc(65536);
+  while (fs.readSync(0, buf, 0, buf.length, null) > 0) {
+    // discard
+  }
   process.exit(0);
 }
 process.exit(0);
