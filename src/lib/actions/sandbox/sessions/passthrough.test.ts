@@ -62,9 +62,7 @@ describe("filterWarmupSessionsListJson", () => {
         count: 2,
         totalCount: 2,
         sessions: [{ key: "agent:main:explicit:real", sessionId: "sid-real" }],
-        entries: [
-          { key: "agent:main:explicit:warm", sessionId: `${WARMUP_SESSION_ID_PREFIX}1` },
-        ],
+        entries: [{ key: "agent:main:explicit:warm", sessionId: `${WARMUP_SESSION_ID_PREFIX}1` }],
       }),
     );
 
