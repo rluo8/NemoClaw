@@ -481,7 +481,7 @@ process.exit(0);
 
       writeOpenClawRegistry("alpha");
       process.env.NEMOCLAW_OPENSHELL_BIN = openshell;
-      process.env.PATH = `${binDir}:${oldPath || ""}`;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath || ""}`;
 
       const backup = sandboxState.backupSandboxState("alpha");
       expect(backup.success).toBe(true);
@@ -1213,8 +1213,16 @@ describe("Deep Agents Code durable state files", () => {
       fs.mkdirSync(binDir, { recursive: true });
       fs.mkdirSync(path.join(deepAgentsDir, ".state"), { recursive: true });
       fs.mkdirSync(path.join(deepAgentsDir, "skills"), { recursive: true });
+      fs.mkdirSync(path.join(deepAgentsDir, "agent", "skills", "note-summarizer"), {
+        recursive: true,
+      });
       fs.writeFileSync(path.join(deepAgentsDir, ".state", "thread.json"), "{}\n");
       fs.writeFileSync(path.join(deepAgentsDir, "skills", "README.md"), "skill\n");
+      // skill-creator writes user skills under ~/.deepagents/agent/skills (#5753)
+      fs.writeFileSync(
+        path.join(deepAgentsDir, "agent", "skills", "note-summarizer", "SKILL.md"),
+        "name: note-summarizer\n",
+      );
       fs.writeFileSync(path.join(deepAgentsDir, "config.toml"), "generated config\n");
       fs.writeFileSync(path.join(deepAgentsDir, "hooks.json"), "{}\n");
       fs.writeFileSync(path.join(deepAgentsDir, ".env"), "NVIDIA_API_KEY=should-not-copy\n");
@@ -1256,19 +1264,37 @@ if (cmd.includes(".env") || cmd.includes(".mcp.json")) {
   process.exit(99);
 }
 if (cmd.includes("[ -d ")) {
-  process.stdout.write(".state\\nskills\\n");
+  process.stdout.write(".state\\nskills\\nagent/skills\\n");
   process.exit(0);
 }
 if (cmd.includes("find ")) {
   process.exit(0);
 }
 if (cmd.includes("tar -cf -")) {
-  const r = spawnSync("tar", ["-cf", "-", "-C", deepAgentsDir, ".state", "skills"], {
+  const r = spawnSync("tar", ["-cf", "-", "-C", deepAgentsDir, ".state", "skills", "agent/skills"], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (r.stdout) fs.writeSync(1, r.stdout);
   if (r.stderr) fs.writeSync(2, r.stderr);
   process.exit(r.status || 0);
+}
+if (cmd.includes("tar --no-same-owner -xf -")) {
+  const chunks = [];
+  for (;;) {
+    const buf = Buffer.alloc(65536);
+    const n = fs.readSync(0, buf, 0, buf.length, null);
+    if (n === 0) break;
+    chunks.push(buf.subarray(0, n));
+  }
+  const r = spawnSync("tar", ["--no-same-owner", "-xf", "-", "-C", deepAgentsDir], {
+    input: Buffer.concat(chunks),
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (r.stderr) fs.writeSync(2, r.stderr);
+  process.exit(r.status || 0);
+}
+if (cmd.includes("rm -rf") || cmd.includes("chown") || cmd.includes("mkdir")) {
+  process.exit(0);
 }
 process.exit(0);
 `,
@@ -1276,16 +1302,16 @@ process.exit(0);
 
       writeAgentRegistry("deepagents", "langchain-deepagents-code");
       process.env.NEMOCLAW_OPENSHELL_BIN = openshell;
-      process.env.PATH = `${binDir}:${oldPath || ""}`;
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath || ""}`;
 
       const backup = sandboxState.backupSandboxState("deepagents", { name: "deepagents-state" });
       expect(backup.success).toBe(true);
-      expect(backup.backedUpDirs).toEqual([".state", "skills"]);
+      expect(backup.backedUpDirs).toEqual([".state", "skills", "agent/skills"]);
       expect(backup.backedUpFiles).toEqual(["config.toml", "hooks.json"]);
       expect(backup.failedDirs).toEqual([]);
       expect(backup.failedFiles).toEqual([]);
       expect(backup.manifest?.agentType).toBe("langchain-deepagents-code");
-      expect(backup.manifest?.stateDirs).toEqual([".state", "skills"]);
+      expect(backup.manifest?.stateDirs).toEqual([".state", "skills", "agent/skills"]);
       expect(backup.manifest?.stateFiles).toEqual([
         { path: "config.toml", strategy: "copy" },
         { path: "hooks.json", strategy: "copy" },
@@ -1296,6 +1322,12 @@ process.exit(0);
       expect(fs.existsSync(path.join(backup.manifest!.backupPath, "skills", "README.md"))).toBe(
         true,
       );
+      // #5753 regression guard: skill-creator output under agent/skills is backed up
+      expect(
+        fs.existsSync(
+          path.join(backup.manifest!.backupPath, "agent", "skills", "note-summarizer", "SKILL.md"),
+        ),
+      ).toBe(true);
       expect(fs.readFileSync(path.join(backup.manifest!.backupPath, "config.toml"), "utf-8")).toBe(
         "generated config\n",
       );
@@ -1304,6 +1336,24 @@ process.exit(0);
       const loggedCommands = fs.readFileSync(sshLog, "utf-8");
       expect(loggedCommands).not.toContain(".env");
       expect(loggedCommands).not.toContain(".mcp.json");
+
+      // #5753 is "skills lost after rebuild" — rebuild = backup + recreate +
+      // restore. Prove the restore half too: wipe the sandbox's agent/skills
+      // (as a fresh recreated sandbox would), restore from the backup, and
+      // assert the skill-creator skill is unpacked back into place.
+      fs.rmSync(path.join(deepAgentsDir, "agent"), { recursive: true, force: true });
+      fs.rmSync(path.join(deepAgentsDir, "skills"), { recursive: true, force: true });
+      const restore = sandboxState.restoreSandboxState("deepagents", backup.manifest!.backupPath);
+      expect(restore.success).toBe(true);
+      expect(restore.restoredDirs).toEqual(
+        expect.arrayContaining([".state", "skills", "agent/skills"]),
+      );
+      expect(
+        fs.readFileSync(
+          path.join(deepAgentsDir, "agent", "skills", "note-summarizer", "SKILL.md"),
+          "utf-8",
+        ),
+      ).toBe("name: note-summarizer\n");
     } finally {
       oldOpenshell === undefined
         ? delete process.env.NEMOCLAW_OPENSHELL_BIN
