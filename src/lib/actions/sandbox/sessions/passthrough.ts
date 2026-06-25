@@ -32,6 +32,7 @@ export function printSessionsPassthroughHelp(verb?: SessionsPassthroughVerb): vo
   console.log(
     `  Pass-through to \`openclaw sessions${usageSuffix} ...\` inside the sandbox via \`openshell sandbox exec\`.`,
   );
+  console.log("  Internal NemoClaw onboard warm-up sessions are hidden from default list output.");
   console.log("  All flags accepted by the in-sandbox OpenClaw CLI are forwarded verbatim.");
   console.log("");
 }
@@ -92,19 +93,24 @@ function filterWarmupSessionsListPayload(parsed: unknown): unknown | null {
   if (!parsed || typeof parsed !== "object") return null;
 
   const obj = parsed as Record<string, unknown>;
+  let sawSessionArray = false;
+  let removedTotal = 0;
+  const next = { ...obj };
   for (const key of ["sessions", "entries", "items"]) {
     const value = obj[key];
     if (!Array.isArray(value)) continue;
+    sawSessionArray = true;
     const { entries, removed } = filterWarmupArray(value);
-    if (removed === 0) return parsed;
-    const next = { ...obj, [key]: entries };
-    if (typeof next.count === "number") next.count = Math.max(0, next.count - removed);
-    if (typeof next.totalCount === "number") {
-      next.totalCount = Math.max(0, next.totalCount - removed);
-    }
-    return next;
+    next[key] = entries;
+    removedTotal += removed;
   }
-  return null;
+  if (!sawSessionArray) return null;
+  if (removedTotal === 0) return parsed;
+  if (typeof next.count === "number") next.count = Math.max(0, next.count - removedTotal);
+  if (typeof next.totalCount === "number") {
+    next.totalCount = Math.max(0, next.totalCount - removedTotal);
+  }
+  return next;
 }
 
 function writeWithTrailingNewline(stream: NodeJS.WriteStream, value: string | undefined): void {
@@ -148,8 +154,11 @@ function warmupIdInTextRow(line: string): boolean {
 }
 
 // Text output is a compatibility wrapper around OpenClaw's current non-TTY
-// table. Prefer the JSON path for stable structure; this only hides warm-up
-// rows from the human display until NemoClaw owns a native renderer.
+// table. OpenClaw owns the table format and currently stores NemoClaw's
+// onboarding scope-upgrade warm-up as a normal session, so we hide only rows
+// with the internal warm-up id prefix. Prefer the JSON path for stable
+// structure; remove this text filter when OpenClaw can mark/prevent the
+// internal warm-up session or NemoClaw renders list output from stable JSON.
 export function filterWarmupSessionsListText(output: string): string {
   const lines = output.split(/\r?\n/);
   let removed = 0;

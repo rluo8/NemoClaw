@@ -56,6 +56,27 @@ describe("filterWarmupSessionsListJson", () => {
     ]);
   });
 
+  it("filters warm-up sessions from every recognized wrapped list array", () => {
+    const filtered = filterWarmupSessionsListJson(
+      JSON.stringify({
+        count: 2,
+        totalCount: 2,
+        sessions: [{ key: "agent:main:explicit:real", sessionId: "sid-real" }],
+        entries: [
+          { key: "agent:main:explicit:warm", sessionId: `${WARMUP_SESSION_ID_PREFIX}1` },
+        ],
+      }),
+    );
+
+    expect(JSON.stringify(JSON.parse(filtered as string))).not.toContain(WARMUP_SESSION_ID_PREFIX);
+    expect(JSON.parse(filtered as string)).toEqual({
+      count: 1,
+      totalCount: 1,
+      sessions: [{ key: "agent:main:explicit:real", sessionId: "sid-real" }],
+      entries: [],
+    });
+  });
+
   it("uses the tolerant session-index parser for noisy JSON output", () => {
     const filtered = filterWarmupSessionsListJson(
       [
