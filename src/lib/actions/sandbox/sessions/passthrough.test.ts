@@ -206,7 +206,7 @@ describe("runSessionsPassthrough", () => {
         "main",
         "--json",
       ],
-      { ignoreError: true, includeStreams: true },
+      { ignoreError: true, includeStreams: true, maxBuffer: 64 * 1024 * 1024 },
     );
     expect(JSON.parse(String(stdoutSpy.mock.calls[0]?.[0]))).toEqual({
       count: 0,
@@ -248,7 +248,7 @@ describe("runSessionsPassthrough", () => {
     expect(execMock).not.toHaveBeenCalled();
     expect(captureMock).toHaveBeenCalledWith(
       ["sandbox", "exec", "--name", "alpha", "--", "openclaw", "sessions"],
-      { ignoreError: true, includeStreams: true },
+      { ignoreError: true, includeStreams: true, maxBuffer: 64 * 1024 * 1024 },
     );
     expect(String(stdoutSpy.mock.calls[0]?.[0])).toBe("Sessions listed: 0\n");
   });
@@ -289,6 +289,40 @@ describe("runSessionsPassthrough", () => {
 
     expect(String(stdoutSpy.mock.calls[0]?.[0])).toBe(`${raw}\n`);
     expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports a clear filter buffer error when large sessions list output exceeds capture capacity", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((
+      code?: string | number | null,
+    ) => {
+      throw new Error(`process.exit:${code}`);
+    }) as never);
+    captureMock.mockReturnValueOnce({
+      status: null,
+      output: "",
+      stdout: "",
+      stderr: "",
+      error: Object.assign(new Error("spawnSync openshell ENOBUFS"), { code: "ENOBUFS" }),
+    });
+
+    try {
+      await expect(
+        runSessionsPassthrough("alpha", { verb: "list", extraArgs: ["--all-agents", "--json"] }),
+      ).rejects.toThrow("process.exit:1");
+    } finally {
+      exitSpy.mockRestore();
+    }
+
+    expect(captureMock).toHaveBeenCalledWith(expect.any(Array), {
+      ignoreError: true,
+      includeStreams: true,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("output exceeded NemoClaw's 64 MiB filtering buffer"),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("--agent"));
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("--limit"));
   });
 
   it("prints captured output when OpenClaw exits non-zero", async () => {

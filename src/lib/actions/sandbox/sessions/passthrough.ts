@@ -8,6 +8,8 @@ import { ensureLiveSandboxOrExit } from "../gateway-state";
 import { isWarmupSessionId, WARMUP_SESSION_ID_PREFIX } from "../warmup-session";
 import { balancedJsonCandidates, parseSessionIndex } from "./export";
 
+const SESSIONS_LIST_CAPTURE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
 export type SessionsPassthroughVerb = "list";
 
 export interface SessionsPassthroughOptions {
@@ -132,6 +134,18 @@ function printJsonParseFailure(): void {
   );
 }
 
+function printSessionsListCaptureBufferFailure(): void {
+  console.error(
+    `  OpenClaw sessions list output exceeded NemoClaw's ${Math.round(
+      SESSIONS_LIST_CAPTURE_MAX_BUFFER_BYTES / 1024 / 1024,
+    )} MiB filtering buffer. Retry with narrower OpenClaw filters such as --agent, --limit, or --json.`,
+  );
+}
+
+function isCaptureBufferFailure(result: { error?: Error }): boolean {
+  return (result.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS";
+}
+
 export function filterWarmupSessionsListJson(output: string): string | null {
   const parsedIndex = parseSessionIndex(output);
   if (parsedIndex === null) {
@@ -190,6 +204,7 @@ export async function runSessionsPassthrough(
     const result = captureOpenshell(buildOpenshellExecArgs(sandboxName, command), {
       ignoreError: true,
       includeStreams: true,
+      maxBuffer: SESSIONS_LIST_CAPTURE_MAX_BUFFER_BYTES,
     });
     const { code, errorMessage } = computeExitCode(result);
     const capturedOutput = capturedStdout(result);
@@ -197,7 +212,11 @@ export async function runSessionsPassthrough(
     if (code !== 0) {
       writeWithTrailingNewline(process.stdout, capturedOutput);
       writeWithTrailingNewline(process.stderr, capturedError);
-      if (errorMessage) console.error(`  Failed to invoke openshell: ${errorMessage}`);
+      if (isCaptureBufferFailure(result)) {
+        printSessionsListCaptureBufferFailure();
+      } else if (errorMessage) {
+        console.error(`  Failed to invoke openshell: ${errorMessage}`);
+      }
       process.exit(code);
     }
 
