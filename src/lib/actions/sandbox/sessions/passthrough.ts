@@ -6,7 +6,7 @@ import { CLI_NAME } from "../../../cli/branding";
 import { buildOpenshellExecArgs, computeExitCode, execSandbox } from "../exec";
 import { ensureLiveSandboxOrExit } from "../gateway-state";
 import { isWarmupSessionId, WARMUP_SESSION_ID_PREFIX } from "../warmup-session";
-import { balancedJsonCandidates, parseSessionIndex } from "./export";
+import { balancedJsonCandidates, parseSessionIndex } from "./session-index";
 
 const SESSIONS_LIST_CAPTURE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
