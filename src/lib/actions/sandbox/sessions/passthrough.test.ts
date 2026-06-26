@@ -136,6 +136,23 @@ describe("filterWarmupSessionsListText", () => {
     );
   });
 
+  it("filters warm-up rows when the session id uses alternate text labels or a bare id column", () => {
+    const filtered = filterWarmupSessionsListText(
+      [
+        "Sessions listed: 4",
+        "direct  agent:main:main  1m ago  model  id:sid-real",
+        `direct  agent:main:explicit  1m ago  model  sessionId:${WARMUP_SESSION_ID_PREFIX}session-id`,
+        `direct  agent:main:explicit  1m ago  model  sid:${WARMUP_SESSION_ID_PREFIX}sid`,
+        `direct  agent:main:explicit  1m ago  model  ${WARMUP_SESSION_ID_PREFIX}bare`,
+        "",
+      ].join("\n"),
+    );
+
+    expect(filtered).toBe(
+      ["Sessions listed: 1", "direct  agent:main:main  1m ago  model  id:sid-real", ""].join("\n"),
+    );
+  });
+
   it("does not drop unrelated text that merely mentions the warm-up prefix", () => {
     const filtered = filterWarmupSessionsListText(
       [

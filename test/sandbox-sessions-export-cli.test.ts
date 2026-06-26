@@ -289,6 +289,40 @@ describe("sandbox sessions export CLI", () => {
     }
   });
 
+  it("reports nothing to export and creates no output artifact when only warm-up sessions exist", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-sessions-export-warmup-"));
+    try {
+      writeSandboxRegistry(home);
+      const openshellLog = path.join(home, "openshell-calls.log");
+      const localBin = buildStubOpenshell(
+        home,
+        openshellLog,
+        JSON.stringify([
+          {
+            key: "agent:main:explicit:warm",
+            sessionId: "nemoclaw-onboard-warmup-cli-only",
+          },
+        ]),
+      );
+
+      const outDir = path.join(home, "sessions-alpha");
+      const result = runWithEnv(`alpha sessions export --out ${outDir} 2>&1`, {
+        HOME: home,
+        PATH: `${localBin}:${process.env.PATH || ""}`,
+      });
+      expect(result.code).toBe(1);
+      expect(result.out).toMatch(/agent 'main' has no sessions to bundle/);
+      expect(fs.existsSync(outDir)).toBe(false);
+
+      const calls = fs.existsSync(openshellLog) ? fs.readFileSync(openshellLog, "utf8") : "";
+      expect(calls).toMatch(/openclaw sessions list --agent main --json/);
+      expect(calls).not.toMatch(/-- sh -c/);
+      expect(calls).not.toMatch(/sandbox download/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("routes a hermes sandbox to `hermes sessions export` instead of `openclaw sessions list`", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-cli-sessions-export-hermes-"));
     try {

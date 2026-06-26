@@ -164,14 +164,19 @@ export function filterWarmupSessionsListJson(output: string): string | null {
 }
 
 function warmupIdInTextRow(line: string): boolean {
-  return line.includes(`id:${WARMUP_SESSION_ID_PREFIX}`);
+  const escapedPrefix = WARMUP_SESSION_ID_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const labeledSessionId = new RegExp(`\\b(?:id|sessionId|sid):${escapedPrefix}`);
+  const bareSessionIdColumn = new RegExp(`(?:^|\\s)${escapedPrefix}[^\\s]*(?:\\s|$)`);
+  return labeledSessionId.test(line) || bareSessionIdColumn.test(line);
 }
 
-// Text output is a compatibility wrapper around OpenClaw's current non-TTY
-// table. OpenClaw owns the table format and currently stores NemoClaw's
-// onboarding scope-upgrade warm-up as a normal session, so we hide only rows
-// with the internal warm-up id prefix. Prefer the JSON path for stable
-// structure; remove this text filter when OpenClaw can mark/prevent the
+// Text output is a compatibility wrapper around OpenClaw's non-TTY table.
+// OpenClaw owns the table format and currently stores NemoClaw's onboarding
+// scope-upgrade warm-up as a normal session, so we hide rows whose session-id
+// field uses the internal warm-up prefix. The accepted source boundary is only
+// session-id shaped cells (`id:`, `sessionId:`, `sid:`, or a bare id column), not
+// arbitrary notes that merely mention the prefix. Prefer the JSON path for
+// stable structure; remove this text filter when OpenClaw can mark/prevent the
 // internal warm-up session or NemoClaw renders list output from stable JSON.
 export function filterWarmupSessionsListText(output: string): string {
   const lines = output.split(/\r?\n/);
