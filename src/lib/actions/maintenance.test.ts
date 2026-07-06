@@ -44,7 +44,7 @@ vi.mock("../domain/maintenance/images", () => ({
   parseSandboxImageRows: vi.fn().mockReturnValue([]),
 }));
 
-import { backupAll, shouldSkipUnreachableSandboxBackup } from "./maintenance";
+import { backupAll, garbageCollectImages, shouldSkipUnreachableSandboxBackup } from "./maintenance";
 
 describe("backupAll", () => {
   beforeEach(() => {
@@ -348,5 +348,25 @@ describe("shouldSkipUnreachableSandboxBackup", () => {
       shouldSkipUnreachableSandboxBackup({ NEMOCLAW_SKIP_UNREACHABLE_SANDBOX_BACKUP: "true" }),
     ).toBe(false);
     expect(shouldSkipUnreachableSandboxBackup({})).toBe(false);
+  });
+});
+
+describe("garbageCollectImages", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.listSandboxes.mockReturnValue({ sandboxes: [], defaultSandbox: null });
+    mocks.dockerListImagesFormat.mockReturnValue("");
+  });
+
+  it("enumerates both the gateway-built and locally prebuilt image repos (#6301)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    await garbageCollectImages({ dryRun: true });
+    logSpy.mockRestore();
+
+    const scannedRepos = mocks.dockerListImagesFormat.mock.calls.map((call) => call[0]);
+    // The locally-prebuilt orphan lives under nemoclaw-sandbox-local; scanning
+    // only openshell/sandbox-from left it invisible to gc.
+    expect(scannedRepos).toContain("openshell/sandbox-from");
+    expect(scannedRepos).toContain("nemoclaw-sandbox-local");
   });
 });
