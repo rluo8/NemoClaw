@@ -39,10 +39,8 @@ vi.mock("../credentials/store", () => ({
 vi.mock("../domain/lifecycle/options", () => ({
   normalizeGarbageCollectImagesOptions: (o: unknown) => o || {},
 }));
-vi.mock("../domain/maintenance/images", () => ({
-  findOrphanedSandboxImages: vi.fn().mockReturnValue([]),
-  parseSandboxImageRows: vi.fn().mockReturnValue([]),
-}));
+// ../domain/maintenance/images is left unmocked so the gc tests run the real
+// orphan-detection helpers and can assert on gc's actual output.
 
 import { backupAll, garbageCollectImages, shouldSkipUnreachableSandboxBackup } from "./maintenance";
 
@@ -354,18 +352,35 @@ describe("shouldSkipUnreachableSandboxBackup", () => {
 describe("garbageCollectImages", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.listSandboxes.mockReturnValue({ sandboxes: [], defaultSandbox: null });
-    mocks.dockerListImagesFormat.mockReturnValue("");
   });
 
-  it("enumerates both the gateway-built and locally prebuilt image repos (#6301)", async () => {
+  it("surfaces a local-repo orphan while preserving a registered local image (#6301)", async () => {
+    // Local repo holds an orphan (gc-test-orphan-111) plus a still-registered
+    // image (live-222); the gateway repo holds only an in-use image.
+    mocks.dockerListImagesFormat.mockImplementation((repo: string) =>
+      repo === "nemoclaw-sandbox-local"
+        ? "nemoclaw-sandbox-local:gc-test-orphan-111\t3GB\nnemoclaw-sandbox-local:live-222\t2GB"
+        : "openshell/sandbox-from:in-use\t1GB",
+    );
+    mocks.listSandboxes.mockReturnValue({
+      sandboxes: [
+        { imageTag: "nemoclaw-sandbox-local:live-222" },
+        { imageTag: "openshell/sandbox-from:in-use" },
+      ],
+      defaultSandbox: null,
+    });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
     await garbageCollectImages({ dryRun: true });
+
+    const out = logSpy.mock.calls.flat().join("\n");
     logSpy.mockRestore();
 
+    // The local orphan is reported, the still-registered local image is not,
+    // and both repos are scanned.
+    expect(out).toContain("nemoclaw-sandbox-local:gc-test-orphan-111");
+    expect(out).not.toContain("nemoclaw-sandbox-local:live-222");
     const scannedRepos = mocks.dockerListImagesFormat.mock.calls.map((call) => call[0]);
-    // The locally-prebuilt orphan lives under nemoclaw-sandbox-local; scanning
-    // only openshell/sandbox-from left it invisible to gc.
     expect(scannedRepos).toContain("openshell/sandbox-from");
     expect(scannedRepos).toContain("nemoclaw-sandbox-local");
   });
