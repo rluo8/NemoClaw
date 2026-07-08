@@ -156,6 +156,8 @@ describe("stopSandboxChannels", () => {
     const script = args[args.length - 1];
     expect(script).toContain("[h]ermes[[:space:]]+gateway[[:space:]]+run");
     expect(script).toContain("[h]ermes\\.real[[:space:]]+gateway[[:space:]]+run");
+    expect(script).not.toContain("openclaw-gateway");
+    expect(script).not.toContain("openclaw[[:space:]]+gateway");
     expect(script).toContain('cmd ~ ENVIRON["p0"]');
     expect(script).not.toContain("-v p0=");
     const output = logSpy.mock.calls.map((c) => c[0]).join("\n");

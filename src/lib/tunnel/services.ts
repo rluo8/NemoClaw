@@ -464,7 +464,11 @@ export function stopSandboxChannels(sandboxName: string): void {
   }
 
   const gatewayLabel = `${agentDisplayName} gateway`;
-  const gatewayStopScript = buildGatewayStopScript(agentRuntime.getGatewayCommand(agent));
+  const gatewayStopScript = buildGatewayStopScript(agent);
+  if (!gatewayStopScript) {
+    warn(`${gatewayLabel} command is not configured; skipping in-sandbox gateway stop.`);
+    return;
+  }
   info(`Stopping in-sandbox ${gatewayLabel} (sandbox: ${sandboxName})...`);
 
   const privilegedResult = stopSandboxChannelsViaKubectl(sandboxName, gatewayStopScript);
@@ -490,6 +494,7 @@ export function stopSandboxChannels(sandboxName: string): void {
 }
 
 const GATEWAY_CLUSTER_CONTAINER = "openshell-cluster-nemoclaw";
+type SessionAgent = ReturnType<typeof agentRuntime.getSessionAgent>;
 
 function escapeEre(value: string): string {
   return value.replace(/[.[\]{}()*+?^$|\\]/g, "\\$&");
@@ -517,12 +522,15 @@ function selfSafeCommandPattern(command: string): string | null {
   return `(^|[[:space:]/])${[safeExecutable, ...args].join("[[:space:]]+")}([[:space:]]|$)`;
 }
 
-function getGatewayStopPatterns(gatewayCommand: string): string[] {
-  const patterns = [
-    "(^|[[:space:]/])openclaw-gateway([[:space:]]|$)",
-    "(^|[[:space:]/])openclaw[[:space:]]+gateway([[:space:]]|$)",
-  ];
-
+function getGatewayStopPatterns(agent: SessionAgent): string[] {
+  // OpenClaw is represented as a null session agent for backward compatibility.
+  const patterns = !agent
+    ? [
+        "(^|[[:space:]/])openclaw-gateway([[:space:]]|$)",
+        "(^|[[:space:]/])openclaw[[:space:]]+gateway([[:space:]]|$)",
+      ]
+    : [];
+  const gatewayCommand = agent?.gateway_command?.trim() ?? (!agent ? "openclaw gateway run" : "");
   const commandPattern = selfSafeCommandPattern(gatewayCommand);
   if (commandPattern) {
     patterns.push(commandPattern);
@@ -538,8 +546,9 @@ function getGatewayStopPatterns(gatewayCommand: string): string[] {
   return [...new Set(patterns)];
 }
 
-function buildGatewayStopScript(gatewayCommand: string): string {
-  const patterns = getGatewayStopPatterns(gatewayCommand);
+function buildGatewayStopScript(agent: SessionAgent): string | null {
+  const patterns = getGatewayStopPatterns(agent);
+  if (patterns.length === 0) return null;
   const awkPatternEnv = patterns
     .map((pattern, index) => ` p${String(index)}=${shellQuote(pattern)}`)
     .join("");
