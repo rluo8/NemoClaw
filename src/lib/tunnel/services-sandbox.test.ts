@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as agentForwardStop from "./agent-forward-stop";
+import * as gatewayStop from "./gateway-stop";
 import * as sandboxGatewayStop from "./sandbox-gateway-stop";
 import { stopAll } from "./services";
 
@@ -131,5 +133,28 @@ describe("stopAll with sandbox channels", () => {
 
     expect(stopSandboxChannels).not.toHaveBeenCalled();
     expect(logSpy.mock.calls.map((call) => call[0]).join("\n")).toContain("Invalid sandbox name");
+  });
+
+  it("keeps host cleanup running for a malformed explicit sandbox name", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stopAgentForwards = vi
+      .spyOn(agentForwardStop, "stopAgentForwardPortsForStop")
+      .mockImplementation(() => {});
+    const releaseGateway = vi
+      .spyOn(gatewayStop, "releaseGatewayPortForStop")
+      .mockImplementation(() => {});
+    writeFileSync(join(pidDir, "cloudflared.pid"), "999999999");
+
+    expect(() =>
+      stopAll({ pidDir, sandboxName: "bad name", releaseGatewayPort: true }),
+    ).not.toThrow();
+
+    expect(stopSandboxChannels).not.toHaveBeenCalled();
+    expect(stopAgentForwards).not.toHaveBeenCalled();
+    expect(releaseGateway).not.toHaveBeenCalled();
+    expect(existsSync(join(pidDir, "cloudflared.pid"))).toBe(false);
+    const output = logSpy.mock.calls.map((call) => call[0]).join("\n");
+    expect(output).toContain("Invalid sandbox name");
+    expect(output).toContain("All services stopped");
   });
 });

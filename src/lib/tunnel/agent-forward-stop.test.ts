@@ -30,7 +30,7 @@ describe("stopAgentForwardPortsForStop", () => {
     const info = vi.fn<(message: string) => void>();
 
     stopAgentForwardPortsForStop("nemohermes", {
-      getSessionAgent: () => ({
+      getRegisteredAgent: () => ({
         displayName: "Hermes Agent",
         forward_ports: [18789, 8642, "8642", 0, 80, 70000, "not-a-port"],
       }),
@@ -87,14 +87,15 @@ describe("stopAgentForwardPortsForStop", () => {
     const runOpenshell = vi.fn();
 
     stopAgentForwardPortsForStop("openclaw-sandbox", {
-      getSessionAgent: () => null,
+      getRegisteredAgent: () => null,
+      getSandbox: () => ({ agent: "openclaw", gatewayPort: 8080 }),
       resolveOpenshell,
       runOpenshell,
     });
 
     stopAgentForwardPortsForStop("empty-agent", {
-      getSessionAgent: () => ({ displayName: "Empty Agent", forward_ports: [] }),
-      getSandbox: () => ({ gatewayPort: 8080 }),
+      getRegisteredAgent: () => ({ displayName: "Empty Agent", forward_ports: [] }),
+      getSandbox: () => ({ agent: "empty-agent", gatewayPort: 8080 }),
       resolveOpenshell,
       runOpenshell,
     });
@@ -108,7 +109,7 @@ describe("stopAgentForwardPortsForStop", () => {
     const warn = vi.fn<(message: string) => void>();
 
     stopAgentForwardPortsForStop("nemohermes", {
-      getSessionAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
+      getRegisteredAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
       getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
       getSandbox: () => ({ gatewayPort: 8080 }),
       resolveOpenshell: () => "/usr/local/bin/openshell",
@@ -128,7 +129,7 @@ describe("stopAgentForwardPortsForStop", () => {
     const warn = vi.fn<(message: string) => void>();
 
     stopAgentForwardPortsForStop("nemohermes", {
-      getSessionAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
+      getRegisteredAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
       getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
       getSandbox: () => ({ gatewayPort: 8080 }),
       resolveOpenshell: () => "/usr/local/bin/openshell",
@@ -151,7 +152,7 @@ describe("stopAgentForwardPortsForStop", () => {
     const warn = vi.fn<(message: string) => void>();
 
     stopAgentForwardPortsForStop("nemohermes", {
-      getSessionAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
+      getRegisteredAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
       getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
       getSandbox: () => ({ gatewayName: "nemoclaw-18080", gatewayPort: 18080 }),
       resolveOpenshell: () => "/usr/local/bin/openshell",
@@ -177,7 +178,7 @@ describe("stopAgentForwardPortsForStop", () => {
     const warn = vi.fn<(message: string) => void>();
 
     stopAgentForwardPortsForStop("nemohermes", {
-      getSessionAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
+      getRegisteredAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
       getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
       getSandbox: () => null,
       resolveOpenshell,
@@ -186,7 +187,46 @@ describe("stopAgentForwardPortsForStop", () => {
 
     expect(resolveOpenshell).not.toHaveBeenCalled();
     expect(warn.mock.calls.map((call) => call[0]).join("\n")).toContain(
-      "cannot safely stop Hermes Agent host port forwards",
+      "cannot safely stop agent host port forwards",
+    );
+  });
+
+  it("does not fall back to an unrelated onboard session when the registry has no agent", () => {
+    const getRegisteredAgent = vi.fn(() => null);
+    const resolveOpenshell = vi.fn(() => "/usr/local/bin/openshell");
+
+    stopAgentForwardPortsForStop("openclaw-sandbox", {
+      getSandbox: () => ({ agent: "openclaw", gatewayPort: 8080 }),
+      getRegisteredAgent,
+      resolveOpenshell,
+    });
+
+    expect(getRegisteredAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "openclaw", gatewayPort: 8080 }),
+    );
+    expect(resolveOpenshell).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the sandbox registry cannot be read", () => {
+    const getRegisteredAgent = vi.fn();
+    const runOpenshell = vi.fn();
+    const warn = vi.fn<(message: string) => void>();
+
+    expect(() =>
+      stopAgentForwardPortsForStop("nemohermes", {
+        getSandbox: () => {
+          throw new Error("invalid registry data");
+        },
+        getRegisteredAgent,
+        runOpenshell,
+        warn,
+      }),
+    ).not.toThrow();
+
+    expect(getRegisteredAgent).not.toHaveBeenCalled();
+    expect(runOpenshell).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map((call) => call[0]).join("\n")).toContain(
+      "Could not read the sandbox registry for 'nemohermes'",
     );
   });
 });

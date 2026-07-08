@@ -24,13 +24,14 @@ type AgentWithForwards = {
 };
 
 type SandboxWithDashboardPort = {
+  agent?: string | null;
   dashboardPort?: unknown;
   gatewayName?: string | null;
   gatewayPort?: number | null;
 };
 
 type StopAgentForwardPortsDeps = {
-  getSessionAgent?: (sandboxName?: string) => AgentWithForwards | null;
+  getRegisteredAgent?: (sandbox: SandboxWithDashboardPort | null) => AgentWithForwards | null;
   getAgentDisplayName?: (agent: AgentWithForwards | null) => string;
   getSandbox?: (sandboxName: string) => SandboxWithDashboardPort | null;
   resolveOpenshell?: () => string | null;
@@ -111,25 +112,43 @@ export function stopAgentForwardPortsForStop(
 ): void {
   if (!sandboxName) return;
 
-  const getSessionAgent = deps.getSessionAgent ?? agentRuntime.getSessionAgent;
-  const agent = getSessionAgent(sandboxName);
-  if (!agent) return;
-
   const warn = deps.warn ?? (() => {});
   const info = deps.info ?? (() => {});
+  const getSandbox = deps.getSandbox ?? registry.getSandbox;
+  let sandbox: SandboxWithDashboardPort | null;
+  try {
+    sandbox = getSandbox(sandboxName);
+  } catch (error) {
+    warn(
+      `Could not read the sandbox registry for '${sandboxName}': ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
+        "Skipping agent host port forward cleanup.",
+    );
+    return;
+  }
+  if (!sandbox) {
+    warn(
+      `Could not resolve sandbox '${sandboxName}' - cannot safely stop agent host port forwards.`,
+    );
+    return;
+  }
+
+  const getRegisteredAgent = deps.getRegisteredAgent ?? agentRuntime.getRegisteredAgent;
+  const agent = getRegisteredAgent(sandbox);
+  if (sandbox.agent && sandbox.agent !== "openclaw" && !agent) {
+    warn(
+      `Could not resolve registered agent '${sandbox.agent}' for sandbox '${sandboxName}'; ` +
+        "skipping agent host port forward cleanup.",
+    );
+    return;
+  }
+  if (!agent) return;
+
   const displayName = deps.getAgentDisplayName
     ? deps.getAgentDisplayName(agent)
     : agentRuntime.getAgentDisplayName(
         agent as Parameters<typeof agentRuntime.getAgentDisplayName>[0],
       );
-  const getSandbox = deps.getSandbox ?? registry.getSandbox;
-  const sandbox = getSandbox(sandboxName);
-  if (!sandbox) {
-    warn(
-      `Could not resolve sandbox '${sandboxName}' - cannot safely stop ${displayName} host port forwards.`,
-    );
-    return;
-  }
   let gatewayName: string;
   try {
     gatewayName = resolveSandboxGatewayName(sandbox);

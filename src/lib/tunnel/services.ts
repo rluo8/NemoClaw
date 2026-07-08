@@ -460,7 +460,7 @@ export function stopAll(opts: ServiceOptions = {}): void {
   // Resolve host-side service state from the same effective sandbox selected
   // for in-sandbox shutdown, so pid cleanup cannot drift to a lower-priority
   // env var or the default sandbox.
-  const pidDir = resolvePidDir(sandboxName ? { ...opts, sandboxName } : opts);
+  const pidDir = resolvePidDir({ ...opts, sandboxName: sandboxName ?? "default" });
   ensurePidDir(pidDir);
 
   if (sandboxName) {
@@ -482,7 +482,7 @@ export function stopAll(opts: ServiceOptions = {}): void {
   // Stop host-side services.
   stopService(pidDir, "cloudflared");
 
-  if (opts.releaseGatewayPort) {
+  if (opts.releaseGatewayPort && sandboxName) {
     agentForwardStop.stopAgentForwardPortsForStop(sandboxName, { info, warn });
     gatewayStop.releaseGatewayPortForStop(sandboxName, { info, warn });
   }
