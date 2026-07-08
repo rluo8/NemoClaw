@@ -157,4 +157,16 @@ describe("stopAll with sandbox channels", () => {
     expect(output).toContain("Invalid sandbox name");
     expect(output).toContain("All services stopped");
   });
+
+  it("does not stop default cloudflared for a malformed sandbox name without an explicit pidDir", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    expect(() => stopAll({ sandboxName: "bad name" })).not.toThrow();
+
+    expect(stopSandboxChannels).not.toHaveBeenCalled();
+    const output = logSpy.mock.calls.map((call) => call[0]).join("\n");
+    expect(output).toContain("Invalid sandbox name without an explicit PID directory");
+    expect(output).not.toContain("cloudflared was not running");
+    expect(output).toContain("All services stopped");
+  });
 });

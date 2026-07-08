@@ -460,8 +460,12 @@ export function stopAll(opts: ServiceOptions = {}): void {
   // Resolve host-side service state from the same effective sandbox selected
   // for in-sandbox shutdown, so pid cleanup cannot drift to a lower-priority
   // env var or the default sandbox.
-  const pidDir = resolvePidDir({ ...opts, sandboxName: sandboxName ?? "default" });
-  ensurePidDir(pidDir);
+  const pidDir =
+    opts.pidDir ??
+    (rawSandboxName && !sandboxName
+      ? undefined
+      : resolvePidDir({ ...opts, sandboxName: sandboxName ?? "default" }));
+  if (pidDir) ensurePidDir(pidDir);
 
   if (sandboxName) {
     sandboxGatewayStop.stopSandboxChannels(sandboxName, { info, warn });
@@ -479,8 +483,14 @@ export function stopAll(opts: ServiceOptions = {}): void {
     /* best-effort */
   }
 
-  // Stop host-side services.
-  stopService(pidDir, "cloudflared");
+  // Stop host-side services only when their state directory is explicit or
+  // derived from a trusted sandbox name. An invalid requested sandbox must not
+  // fall through to the default sandbox's PID directory.
+  if (pidDir) {
+    stopService(pidDir, "cloudflared");
+  } else {
+    warn("Invalid sandbox name without an explicit PID directory; skipping host service stop.");
+  }
 
   if (opts.releaseGatewayPort && sandboxName) {
     agentForwardStop.stopAgentForwardPortsForStop(sandboxName, { info, warn });
