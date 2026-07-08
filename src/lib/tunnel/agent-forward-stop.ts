@@ -44,6 +44,7 @@ type StopAgentForwardPortsDeps = {
 
 const FORWARD_RELEASE_TIMEOUT_MS = 5000;
 const FORWARD_RELEASE_POLL_MS = 250;
+const SAFE_SANDBOX_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 function confirmForwardPortReleased(port: number): boolean {
   const now = Date.now;
@@ -113,6 +114,11 @@ export function stopAgentForwardPortsForStop(
   if (!sandboxName) return;
 
   const warn = deps.warn ?? (() => {});
+  if (!SAFE_SANDBOX_NAME_RE.test(sandboxName) || sandboxName.includes("..")) {
+    warn(`Invalid sandbox name: ${JSON.stringify(sandboxName)} - skipping host forward cleanup.`);
+    return;
+  }
+
   const info = deps.info ?? (() => {});
   const getSandbox = deps.getSandbox ?? registry.getSandbox;
   let sandbox: SandboxWithDashboardPort | null;

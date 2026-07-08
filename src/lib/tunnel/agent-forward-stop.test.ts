@@ -229,4 +229,30 @@ describe("stopAgentForwardPortsForStop", () => {
       "Could not read the sandbox registry for 'nemohermes'",
     );
   });
+
+  it.each([
+    "../escape",
+    "bad name",
+    "--gateway",
+  ])("rejects malformed sandbox name %j before registry or OpenShell access", (sandboxName) => {
+    const getSandbox = vi.fn();
+    const resolveOpenshell = vi.fn(() => "/usr/local/bin/openshell");
+    const runCaptureOpenshell = vi.fn();
+    const runOpenshell = vi.fn();
+    const warn = vi.fn<(message: string) => void>();
+
+    stopAgentForwardPortsForStop(sandboxName, {
+      getSandbox,
+      resolveOpenshell,
+      runCaptureOpenshell,
+      runOpenshell,
+      warn,
+    });
+
+    expect(getSandbox).not.toHaveBeenCalled();
+    expect(resolveOpenshell).not.toHaveBeenCalled();
+    expect(runCaptureOpenshell).not.toHaveBeenCalled();
+    expect(runOpenshell).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Invalid sandbox name"));
+  });
 });
