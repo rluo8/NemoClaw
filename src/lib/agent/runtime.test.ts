@@ -74,6 +74,15 @@ describe("getRegisteredAgent", () => {
   it("fails closed when the registered agent definition is unavailable", () => {
     expect(getRegisteredAgent({ agent: "missing-agent" })).toBeNull();
   });
+
+  it.each([
+    "../openclaw",
+    "/tmp/agent",
+    "hermes/../openclaw",
+    "hermes\\openclaw",
+  ])("fails closed for path-like persisted agent name %j", (agent) => {
+    expect(getRegisteredAgent({ agent })).toBeNull();
+  });
 });
 
 function extractGatewayProcessPattern(script: string | null): string {

@@ -10,7 +10,7 @@
 import { DASHBOARD_PORT } from "../core/ports";
 import * as onboardSession from "../state/onboard-session";
 import * as registry from "../state/registry";
-import { type AgentDefinition, isTerminalAgent, loadAgent } from "./defs";
+import { type AgentDefinition, isTerminalAgent, listAgents, loadAgent } from "./defs";
 import { getTerminalCommand } from "./gateway-restart-scripts";
 
 type RegisteredAgentSource = { agent?: string | null } | null | undefined;
@@ -44,11 +44,16 @@ export function getSessionAgent(sandboxName?: string): AgentDefinition | null {
   }
 }
 
-/** Resolve only the agent persisted on the supplied sandbox registry row. */
+/**
+ * Resolve only the canonical agent persisted on the supplied sandbox registry row.
+ * Registry state is user-writable, so validate against the trusted manifest inventory
+ * before allowing its value to become a filesystem path component in loadAgent().
+ */
 export function getRegisteredAgent(source: RegisteredAgentSource): AgentDefinition | null {
   const name = source?.agent;
   if (!name || name === "openclaw") return null;
   try {
+    if (!listAgents().includes(name)) return null;
     return loadAgent(name);
   } catch {
     return null;
