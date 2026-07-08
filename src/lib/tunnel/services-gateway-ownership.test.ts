@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SandboxEntry } from "../state/registry";
+import * as agentForwardStop from "./agent-forward-stop";
 import type { ReleaseGatewayPortResult } from "./gateway-port-release";
 import type { GatewayStopDeps } from "./gateway-stop";
 import * as gatewayStop from "./gateway-stop";
@@ -189,6 +190,9 @@ describe("stopAll gateway-stop wiring", () => {
     const releaseForStop = vi
       .spyOn(gatewayStop, "releaseGatewayPortForStop")
       .mockImplementation(() => {});
+    const stopAgentForwards = vi
+      .spyOn(agentForwardStop, "stopAgentForwardPortsForStop")
+      .mockImplementation(() => {});
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     try {
@@ -197,6 +201,11 @@ describe("stopAll gateway-stop wiring", () => {
       rmSync(pidDir, { recursive: true, force: true });
     }
 
+    expect(stopAgentForwards).toHaveBeenCalledTimes(1);
+    expect(stopAgentForwards).toHaveBeenCalledWith("alpha", {
+      info: expect.any(Function),
+      warn: expect.any(Function),
+    });
     expect(releaseForStop).toHaveBeenCalledTimes(1);
     expect(releaseForStop).toHaveBeenCalledWith("alpha", {
       info: expect.any(Function),
@@ -213,6 +222,9 @@ describe("stopAll gateway-stop wiring", () => {
     const releaseForStop = vi
       .spyOn(gatewayStop, "releaseGatewayPortForStop")
       .mockImplementation(() => {});
+    const stopAgentForwards = vi
+      .spyOn(agentForwardStop, "stopAgentForwardPortsForStop")
+      .mockImplementation(() => {});
 
     try {
       stopAll({ pidDir, sandboxName: "alpha" });
@@ -221,5 +233,6 @@ describe("stopAll gateway-stop wiring", () => {
     }
 
     expect(releaseForStop).not.toHaveBeenCalled();
+    expect(stopAgentForwards).not.toHaveBeenCalled();
   });
 });

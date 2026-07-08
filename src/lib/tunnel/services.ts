@@ -17,11 +17,14 @@ import {
 import { basename, join } from "node:path";
 import { dockerSpawnSync } from "../adapters/docker";
 import { resolveOpenshell } from "../adapters/openshell/resolve";
+import * as agentRuntime from "../agent/runtime";
 import { renderBox } from "../cli/banner";
 import { AGENT_PRODUCT_NAME, CLI_DISPLAY_NAME, CLI_NAME } from "../cli/branding";
 import { isRecord } from "../core/json-types";
 import { DASHBOARD_PORT } from "../core/ports";
+import { shellQuote } from "../core/shell-quote";
 import { buildSubprocessEnv } from "../subprocess-env";
+import * as agentForwardStop from "./agent-forward-stop";
 import { registerTunnelOrigin } from "./allowed-origins";
 import * as gatewayStop from "./gateway-stop";
 
@@ -443,26 +446,29 @@ export function showStatus(opts: ServiceOptions = {}): void {
 }
 
 /**
- * Stop the OpenClaw gateway (and its messaging channels) inside the sandbox.
+ * Stop the active agent gateway (and its messaging channels) inside the sandbox.
  *
- * Uses the OpenShell gateway container's kubectl as the privileged path so it
- * can signal the gateway process even when the sandbox SSH/exec user is
- * `sandbox` and the gateway process runs as the separate `gateway` user.  The
- * fallback `openshell sandbox exec` path uses the same verified script for
- * older/non-root deployments where the exec user can signal the gateway.
+ * Prefer kubectl via the OpenShell gateway container so we can signal gateway
+ * processes owned by the `gateway` user; fall back to `openshell sandbox exec`
+ * for older deployments.
  *
- * The in-sandbox script intentionally does not rely on a bare `pkill -f`
- * result: `pkill -f openclaw[- ]gateway` can match the transient shell/pkill
- * command line and report success while the real `openclaw-gateway` process
- * survives.  Instead, it gathers concrete PIDs from `ps`, excludes its own
- * process tree, sends TERM/KILL as needed, and only reports success after a
- * post-stop process scan is empty.
+ * The script scans concrete PIDs and verifies they are gone instead of relying
+ * on `pkill -f`, which can match its own transient command line.
  */
 export function stopSandboxChannels(sandboxName: string): void {
-  info(`Stopping in-sandbox OpenClaw gateway (sandbox: ${sandboxName})...`);
+  const agent = agentRuntime.getSessionAgent(sandboxName);
+  const agentDisplayName = agentRuntime.getAgentDisplayName(agent);
+  if (!agentRuntime.hasGatewayRuntime(agent)) {
+    info(`${agentDisplayName} has no gateway runtime; skipping in-sandbox gateway stop.`);
+    return;
+  }
 
-  const privilegedResult = stopSandboxChannelsViaKubectl(sandboxName);
-  if (reportStopResult(privilegedResult)) return;
+  const gatewayLabel = `${agentDisplayName} gateway`;
+  const gatewayStopScript = buildGatewayStopScript(agentRuntime.getGatewayCommand(agent));
+  info(`Stopping in-sandbox ${gatewayLabel} (sandbox: ${sandboxName})...`);
+
+  const privilegedResult = stopSandboxChannelsViaKubectl(sandboxName, gatewayStopScript);
+  if (reportStopResult(privilegedResult, gatewayLabel)) return;
 
   const openshell = resolveOpenshell();
   if (!openshell) {
@@ -472,24 +478,85 @@ export function stopSandboxChannels(sandboxName: string): void {
 
   const fallbackResult = spawnSync(
     openshell,
-    ["sandbox", "exec", "--name", sandboxName, "--", "sh", "-lc", GATEWAY_STOP_SCRIPT],
-    { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: 20000 },
+    ["sandbox", "exec", "--name", sandboxName, "--", "sh", "-s"],
+    {
+      encoding: "utf-8",
+      input: gatewayStopScript,
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 20000,
+    },
   );
-  reportStopResult(fallbackResult);
+  reportStopResult(fallbackResult, gatewayLabel);
 }
 
 const GATEWAY_CLUSTER_CONTAINER = "openshell-cluster-nemoclaw";
 
-const GATEWAY_STOP_SCRIPT = String.raw`
+function escapeEre(value: string): string {
+  return value.replace(/[.[\]{}()*+?^$|\\]/g, "\\$&");
+}
+
+function escapeCharClass(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\]/g, "\\]")
+    .replace(/-/g, "\\-")
+    .replace(/\^/g, "\\^");
+}
+
+function selfSafeCommandPattern(command: string): string | null {
+  const parts = command.trim().split(/\s+/).filter(Boolean);
+  const executable = parts[0];
+  if (!executable) return null;
+
+  const executableName = basename(executable);
+  const first = executableName[0];
+  if (!first) return null;
+
+  const safeExecutable = `[${escapeCharClass(first)}]${escapeEre(executableName.slice(1))}`;
+  const args = parts.slice(1).map((part) => escapeEre(part));
+  return `(^|[[:space:]/])${[safeExecutable, ...args].join("[[:space:]]+")}([[:space:]]|$)`;
+}
+
+function getGatewayStopPatterns(gatewayCommand: string): string[] {
+  const patterns = [
+    "(^|[[:space:]/])openclaw-gateway([[:space:]]|$)",
+    "(^|[[:space:]/])openclaw[[:space:]]+gateway([[:space:]]|$)",
+  ];
+
+  const commandPattern = selfSafeCommandPattern(gatewayCommand);
+  if (commandPattern) {
+    patterns.push(commandPattern);
+  }
+
+  if (/\bhermes\b/.test(gatewayCommand)) {
+    const hermesReexecPattern = selfSafeCommandPattern("hermes.real gateway run");
+    if (hermesReexecPattern) {
+      patterns.push(hermesReexecPattern);
+    }
+  }
+
+  return [...new Set(patterns)];
+}
+
+function buildGatewayStopScript(gatewayCommand: string): string {
+  const patterns = getGatewayStopPatterns(gatewayCommand);
+  const awkPatternEnv = patterns
+    .map((pattern, index) => ` p${String(index)}=${shellQuote(pattern)}`)
+    .join("");
+  const awkCondition = patterns
+    .map((_, index) => `cmd ~ ENVIRON["p${String(index)}"]`)
+    .join(" || ");
+
+  return String.raw`
 set -eu
 self="$$"
 parent="$PPID"
 find_gateway_pids() {
-  ps -eo pid=,args= 2>/dev/null | awk -v self="$self" -v parent="$parent" '
+  ps -eo pid=,args= 2>/dev/null |${awkPatternEnv} awk -v self="$self" -v parent="$parent" '
     $1 ~ /^[0-9]+$/ && $1 != self && $1 != parent {
       cmd = $0
       sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", cmd)
-      if (cmd ~ /(^|[[:space:]\/])openclaw-gateway([[:space:]]|$)/ || cmd ~ /(^|[[:space:]\/])openclaw[[:space:]]+gateway([[:space:]]|$)/) {
+      if (${awkCondition}) {
         seen[$1] = 1
       }
     }
@@ -524,10 +591,14 @@ done
 printf '%s\n' "$remaining" >&2
 exit 2
 `;
+}
 
 type StopAttemptResult = ReturnType<typeof spawnSync>;
 
-function stopSandboxChannelsViaKubectl(sandboxName: string): StopAttemptResult | null {
+function stopSandboxChannelsViaKubectl(
+  sandboxName: string,
+  gatewayStopScript: string,
+): StopAttemptResult | null {
   const podsResult = dockerSpawnSync(
     ["exec", GATEWAY_CLUSTER_CONTAINER, "kubectl", "get", "pods", "-n", "openshell", "-o", "name"],
     { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000 },
@@ -556,21 +627,21 @@ function stopSandboxChannelsViaKubectl(sandboxName: string): StopAttemptResult |
       "--",
       "sh",
       "-lc",
-      GATEWAY_STOP_SCRIPT,
+      gatewayStopScript,
     ],
     { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], timeout: 20000 },
   );
 }
 
-function reportStopResult(result: StopAttemptResult | null): boolean {
+function reportStopResult(result: StopAttemptResult | null, gatewayLabel: string): boolean {
   if (!result) return false;
 
   if (result.status === 0) {
-    info("OpenClaw gateway stopped inside sandbox.");
+    info(`${gatewayLabel} stopped inside sandbox.`);
     return true;
   }
   if (result.status === 1) {
-    info("OpenClaw gateway was not running inside sandbox.");
+    info(`${gatewayLabel} was not running inside sandbox.`);
     return true;
   }
 
@@ -588,7 +659,7 @@ function reportStopResult(result: StopAttemptResult | null): boolean {
 }
 
 export function stopAll(opts: ServiceOptions = {}): void {
-  // Stop the in-sandbox OpenClaw gateway (and its messaging channels).
+  // Resolve the target sandbox once and reuse it for in-sandbox and host-side cleanup.
   const rawSandboxName =
     opts.sandboxName ??
     process.env.NEMOCLAW_SANDBOX_NAME ??
@@ -625,6 +696,7 @@ export function stopAll(opts: ServiceOptions = {}): void {
   stopService(pidDir, "cloudflared");
 
   if (opts.releaseGatewayPort) {
+    agentForwardStop.stopAgentForwardPortsForStop(sandboxName, { info, warn });
     gatewayStop.releaseGatewayPortForStop(sandboxName, { info, warn });
   }
 

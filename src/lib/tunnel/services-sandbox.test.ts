@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const resolveOpenshellModule = require("../adapters/openshell/resolve");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const agentRuntimeModule = require("../agent/runtime") as typeof import("../agent/runtime");
 
 const { stopAll, stopSandboxChannels } = require("./services") as typeof import("./services");
 
@@ -24,10 +26,13 @@ const { stopAll, stopSandboxChannels } = require("./services") as typeof import(
 describe("stopSandboxChannels", () => {
   let spawnSyncSpy: ReturnType<typeof vi.spyOn>;
   let originalResolve: typeof resolveOpenshellModule.resolveOpenshell;
+  let originalGetSessionAgent: typeof agentRuntimeModule.getSessionAgent;
 
   beforeEach(() => {
     originalResolve = resolveOpenshellModule.resolveOpenshell;
+    originalGetSessionAgent = agentRuntimeModule.getSessionAgent;
     resolveOpenshellModule.resolveOpenshell = vi.fn(() => "/usr/local/bin/openshell");
+    agentRuntimeModule.getSessionAgent = vi.fn(() => null);
     // Spy on child_process.spawnSync used by the compiled dist module.
     // The dist code does `require("node:child_process").spawnSync`, so
     // we spy on the same module that the compiled code loaded.
@@ -38,6 +43,7 @@ describe("stopSandboxChannels", () => {
 
   afterEach(() => {
     resolveOpenshellModule.resolveOpenshell = originalResolve;
+    agentRuntimeModule.getSessionAgent = originalGetSessionAgent;
     spawnSyncSpy.mockRestore();
   });
 
@@ -105,8 +111,11 @@ describe("stopSandboxChannels", () => {
     expect(spawnSyncSpy).toHaveBeenNthCalledWith(
       2,
       "/usr/local/bin/openshell",
-      ["sandbox", "exec", "--name", "my-sandbox", "--", "sh", "-lc", expect.any(String)],
-      expect.objectContaining({ timeout: 20000 }),
+      ["sandbox", "exec", "--name", "my-sandbox", "--", "sh", "-s"],
+      expect.objectContaining({
+        input: expect.stringContaining("find_gateway_pids"),
+        timeout: 20000,
+      }),
     );
     const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(output).toContain("OpenClaw gateway stopped inside sandbox");
@@ -123,6 +132,59 @@ describe("stopSandboxChannels", () => {
 
     const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(output).toContain("OpenClaw gateway was not running inside sandbox");
+    logSpy.mockRestore();
+  });
+
+  it("uses the active agent gateway command for Hermes shutdown", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    agentRuntimeModule.getSessionAgent = vi.fn(
+      () =>
+        ({
+          name: "hermes",
+          displayName: "Hermes Agent",
+          gateway_command: "hermes gateway run",
+          forward_ports: [18789, 8642],
+        }) as unknown as ReturnType<typeof agentRuntimeModule.getSessionAgent>,
+    );
+    spawnSyncSpy
+      .mockReturnValueOnce({ status: 0, stdout: "pod/my-sandbox-0\n" })
+      .mockReturnValueOnce({ status: 1 });
+
+    stopSandboxChannels("my-sandbox");
+
+    const args = spawnSyncSpy.mock.calls[1][1] as string[];
+    const script = args[args.length - 1];
+    expect(script).toContain("[h]ermes[[:space:]]+gateway[[:space:]]+run");
+    expect(script).toContain("[h]ermes\\.real[[:space:]]+gateway[[:space:]]+run");
+    expect(script).toContain('cmd ~ ENVIRON["p0"]');
+    expect(script).not.toContain("-v p0=");
+    const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
+    expect(output).toContain("Hermes Agent gateway was not running inside sandbox");
+    expect(output).not.toContain("OpenClaw gateway was not running inside sandbox");
+    logSpy.mockRestore();
+  });
+
+  it("does not treat a terminal agent command as a gateway process", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    agentRuntimeModule.getSessionAgent = vi.fn(
+      () =>
+        ({
+          name: "langchain-deepagents-code",
+          displayName: "LangChain Deep Agents Code",
+          runtime: {
+            kind: "terminal",
+            interactive_command: "dcode",
+            headless_command: "dcode -n",
+          },
+        }) as unknown as ReturnType<typeof agentRuntimeModule.getSessionAgent>,
+    );
+
+    stopSandboxChannels("dcode-sandbox");
+
+    expect(spawnSyncSpy).not.toHaveBeenCalled();
+    expect(logSpy.mock.calls.map((c) => c[0]).join("\n")).toContain(
+      "LangChain Deep Agents Code has no gateway runtime",
+    );
     logSpy.mockRestore();
   });
 
@@ -177,6 +239,7 @@ describe("stopSandboxChannels", () => {
     expect(args[1]).toBe("exec");
     expect(args[2]).toBe("--name");
     expect(args[3]).toBe("my-sandbox");
+    expect(args).not.toContain(expect.stringContaining("find_gateway_pids"));
     logSpy.mockRestore();
   });
 

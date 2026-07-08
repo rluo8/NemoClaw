@@ -1,0 +1,126 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, expect, it, vi } from "vitest";
+
+import { stopAgentForwardPortsForStop } from "./agent-forward-stop";
+
+function forwardList(entries: Array<{ sandbox: string; port: number; status?: string }>): string {
+  return [
+    "SANDBOX BIND PORT PID STATUS",
+    ...entries.map(
+      (entry, index) =>
+        `${entry.sandbox} 127.0.0.1 ${String(entry.port)} ${String(1000 + index)} ${
+          entry.status ?? "running"
+        }`,
+    ),
+  ].join("\n");
+}
+
+describe("stopAgentForwardPortsForStop", () => {
+  it("stops declared and runtime dashboard forwards with sandbox-scoped commands", () => {
+    const runOpenshell = vi.fn();
+    const runCaptureOpenshell = vi.fn(() =>
+      forwardList([
+        { sandbox: "nemohermes", port: 18789 },
+        { sandbox: "nemohermes", port: 8642 },
+        { sandbox: "nemohermes", port: 18792 },
+      ]),
+    );
+    const info = vi.fn<(message: string) => void>();
+
+    stopAgentForwardPortsForStop("nemohermes", {
+      getSessionAgent: () => ({
+        displayName: "Hermes Agent",
+        forward_ports: [18789, 8642, "8642", 0, 80, 70000, "not-a-port"],
+      }),
+      getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
+      getSandbox: () => ({ dashboardPort: 18792 }),
+      resolveOpenshell: () => "/usr/local/bin/openshell",
+      runOpenshell,
+      runCaptureOpenshell,
+      info,
+    });
+
+    expect(runOpenshell).toHaveBeenCalledTimes(3);
+    expect(runOpenshell).toHaveBeenNthCalledWith(1, ["forward", "stop", "18789", "nemohermes"], {
+      ignoreError: true,
+      suppressOutput: true,
+    });
+    expect(runOpenshell).toHaveBeenNthCalledWith(2, ["forward", "stop", "8642", "nemohermes"], {
+      ignoreError: true,
+      suppressOutput: true,
+    });
+    expect(runOpenshell).toHaveBeenNthCalledWith(3, ["forward", "stop", "18792", "nemohermes"], {
+      ignoreError: true,
+      suppressOutput: true,
+    });
+    expect(runCaptureOpenshell).toHaveBeenCalledTimes(3);
+    expect(info.mock.calls.map((call) => call[0]).join("\n")).toContain(
+      "Stopped Hermes Agent host port forward 8642",
+    );
+  });
+
+  it("skips OpenClaw or agents without declared forwards", () => {
+    const resolveOpenshell = vi.fn(() => "/usr/local/bin/openshell");
+    const runOpenshell = vi.fn();
+
+    stopAgentForwardPortsForStop("openclaw-sandbox", {
+      getSessionAgent: () => null,
+      resolveOpenshell,
+      runOpenshell,
+    });
+
+    stopAgentForwardPortsForStop("empty-agent", {
+      getSessionAgent: () => ({ displayName: "Empty Agent", forward_ports: [] }),
+      getSandbox: () => null,
+      resolveOpenshell,
+      runOpenshell,
+    });
+
+    expect(resolveOpenshell).not.toHaveBeenCalled();
+    expect(runOpenshell).not.toHaveBeenCalled();
+  });
+
+  it("leaves forwards alone when OpenShell reports a different owner", () => {
+    const runOpenshell = vi.fn();
+    const warn = vi.fn<(message: string) => void>();
+
+    stopAgentForwardPortsForStop("nemohermes", {
+      getSessionAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
+      getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
+      getSandbox: () => null,
+      resolveOpenshell: () => "/usr/local/bin/openshell",
+      runOpenshell,
+      runCaptureOpenshell: () => forwardList([{ sandbox: "other-sandbox", port: 8642 }]),
+      warn,
+    });
+
+    expect(runOpenshell).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map((call) => call[0]).join("\n")).toContain(
+      "belongs to another sandbox",
+    );
+  });
+
+  it("does not stop a forward when ownership cannot be enumerated", () => {
+    const runOpenshell = vi.fn();
+    const warn = vi.fn<(message: string) => void>();
+
+    stopAgentForwardPortsForStop("nemohermes", {
+      getSessionAgent: () => ({ displayName: "Hermes Agent", forward_ports: [8642] }),
+      getAgentDisplayName: (agent) => agent?.displayName ?? "OpenClaw",
+      getSandbox: () => null,
+      resolveOpenshell: () => "/usr/local/bin/openshell",
+      runOpenshell,
+      runCaptureOpenshell: () => {
+        throw new Error("forward list failed");
+      },
+      warn,
+    });
+
+    expect(runOpenshell).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map((call) => call[0]).join("\n")).toContain(
+      "Could not enumerate OpenShell forwards",
+    );
+  });
+});
