@@ -35,12 +35,12 @@ function resolveEffectivePolicy(presetNames: string[]): string {
 
   for (const presetName of presetNames) {
     const presetContent = policies.loadPreset(presetName);
-    if (!presetContent) throw new Error(`Missing preset: ${presetName}`);
+    expect(presetContent, `Missing preset: ${presetName}`).not.toBeNull();
 
-    const presetEntries = policies.extractPresetEntries(presetContent.replaceAll("\r\n", "\n"));
-    if (!presetEntries) throw new Error(`Missing policy entries: ${presetName}`);
+    const presetEntries = policies.extractPresetEntries(presetContent!.replaceAll("\r\n", "\n"));
+    expect(presetEntries, `Missing policy entries: ${presetName}`).not.toBeNull();
 
-    effectivePolicy = policies.mergePresetIntoPolicy(effectivePolicy, presetEntries);
+    effectivePolicy = policies.mergePresetIntoPolicy(effectivePolicy, presetEntries!);
   }
 
   return effectivePolicy;
