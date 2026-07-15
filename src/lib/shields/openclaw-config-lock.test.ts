@@ -34,6 +34,19 @@ function createExec(
   },
 ): { calls: RunCall[]; privileged: PrivilegedExec } {
   const calls: RunCall[] = [];
+  const guardResult = (cmd: string[]): PrivilegedExecResult => {
+    const scriptIndex =
+      cmd.indexOf("-") >= 0
+        ? cmd.indexOf("-")
+        : cmd.indexOf(cmd.find((arg) => arg.endsWith("openclaw-config-guard.py")) ?? "");
+    const action = cmd[scriptIndex + 1];
+    return {
+      status: 0,
+      signal: null,
+      stdout: `${success(action, action === "lock")}\n`,
+      stderr: "",
+    };
+  };
   return {
     calls,
     privileged: {
@@ -43,18 +56,7 @@ function createExec(
           case "test":
             return { status: installed ? 0 : 1, signal: null, stdout: "", stderr: "" };
         }
-        if (cmd.includes("gosu")) return validationResult;
-        const scriptIndex =
-          cmd.indexOf("-") >= 0
-            ? cmd.indexOf("-")
-            : cmd.indexOf(cmd.find((arg) => arg.endsWith("openclaw-config-guard.py")) ?? "");
-        const action = cmd[scriptIndex + 1];
-        return {
-          status: 0,
-          signal: null,
-          stdout: `${success(action, action === "lock")}\n`,
-          stderr: "",
-        };
+        return cmd.includes("gosu") ? validationResult : guardResult(cmd);
       },
     },
   };
@@ -204,6 +206,35 @@ describe("OpenClaw top-config guard host wiring", () => {
     expect(validateOpenClawConfigCandidate(privileged, "{}\n")).toEqual([
       expect.stringContaining("timed out or was terminated"),
     ]);
+  });
+
+  it.each([
+    {
+      label: "times out",
+      result: { status: 124, signal: null, error: undefined },
+      reason: "timed out or was terminated",
+    },
+    {
+      label: "is terminated",
+      result: { status: null, signal: "SIGTERM" as const, error: undefined },
+      reason: "timed out or was terminated",
+    },
+    {
+      label: "has an execution error",
+      result: { status: 1, signal: null, error: "spawn failed" },
+      reason: "could not run",
+    },
+  ])("does not trust partial schema output when validation $label", ({ result, reason }) => {
+    const { privileged } = createExec(true, {
+      ...result,
+      stdout: JSON.stringify({ valid: false, issues: [{ path: "web_search" }] }),
+      stderr: "",
+    });
+
+    const issues = validateOpenClawConfigCandidate(privileged, "{}\n");
+
+    expect(issues).toEqual([expect.stringContaining(reason)]);
+    expect(issues.join("\n")).not.toContain("schema rejected");
   });
 
   it("rejects an oversized candidate before creating a sandbox temp file", () => {

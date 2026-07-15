@@ -378,7 +378,12 @@ describe("config set nested URL SSRF enforcement", () => {
     const priorShieldsAudit = require.cache[shieldsAuditPath];
     const rejection =
       "OpenClaw config schema rejected the candidate at <root>; existing config was not changed";
-    const restorePrivilegedExec = installMockPrivilegedExec(privilegedExecPath, [rejection]);
+    const events: string[] = [];
+    const restorePrivilegedExec = installMockPrivilegedExec(
+      privilegedExecPath,
+      [rejection],
+      events,
+    );
 
     delete require.cache[sandboxConfigPath];
     requireCache[openshellPath] = {
@@ -408,6 +413,7 @@ describe("config set nested URL SSRF enforcement", () => {
         await configSet("sandbox-schema-test", {
           key: "agents.defaults.timeoutSeconds",
           value: "600",
+          restart: true,
         });
       } catch (error) {
         thrown = error;
@@ -415,14 +421,16 @@ describe("config set nested URL SSRF enforcement", () => {
 
       expect(thrown).toBeInstanceOf(SandboxConfigError);
       expect((thrown as { lines: string[] }).lines).toEqual([`  ${rejection}`]);
+      // The rejection must land before any write or restart: validation ran and
+      // nothing after it did — no lock entry and no config-guard write — so the
+      // post-write gateway restart requested above is never reached.
+      expect(events).toEqual(["validate"]);
+      expect(restorePrivilegedExec.guardSpy).not.toHaveBeenCalled();
       expect(appendAuditEntry).not.toHaveBeenCalled();
     } finally {
-      if (priorSandboxConfig) requireCache[sandboxConfigPath] = priorSandboxConfig;
-      else delete requireCache[sandboxConfigPath];
-      if (priorOpenshell) requireCache[openshellPath] = priorOpenshell;
-      else delete requireCache[openshellPath];
-      if (priorShieldsAudit) requireCache[shieldsAuditPath] = priorShieldsAudit;
-      else delete requireCache[shieldsAuditPath];
+      restoreCachedModule(sandboxConfigPath, priorSandboxConfig);
+      restoreCachedModule(openshellPath, priorOpenshell);
+      restoreCachedModule(shieldsAuditPath, priorShieldsAudit);
       restorePrivilegedExec();
     }
   });

@@ -147,10 +147,10 @@ export function validateOpenClawConfigCandidate(
   } catch {
     payload = null;
   }
+  const validatorCompleted = result.signal === null && !result.error;
   if (
+    validatorCompleted &&
     result.status === 0 &&
-    result.signal === null &&
-    !result.error &&
     payload &&
     typeof payload === "object" &&
     (payload as { valid?: unknown }).valid === true
@@ -160,6 +160,8 @@ export function validateOpenClawConfigCandidate(
 
   const paths = schemaIssuePaths(payload);
   if (
+    validatorCompleted &&
+    result.status === 1 &&
     payload &&
     typeof payload === "object" &&
     (payload as { valid?: unknown }).valid === false &&
