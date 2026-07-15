@@ -348,6 +348,11 @@
     },
     {
       "file": "test/pr-workflow-contract.test.ts",
+      "test": "folds hermetic E2E support and Ollama proxy coverage into existing Vitest lanes",
+      "category": "security"
+    },
+    {
+      "file": "test/pr-workflow-contract.test.ts",
       "test": "keeps the installer verifier inside the trusted composite action",
       "category": "security"
     },
@@ -450,6 +455,11 @@
       "file": "test/runner.test.ts",
       "test": "walkthrough.sh does not embed NVIDIA_INFERENCE_API_KEY in tmux or sandbox commands",
       "category": "security"
+    },
+    {
+      "file": "test/starter-prompt-docs.test.ts",
+      "test": "prepares the Starter Prompt in every docs build entry point (#5048)",
+      "category": "compatibility"
     },
     {
       "file": "test/validate-blueprint.test.ts",
