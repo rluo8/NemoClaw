@@ -121,6 +121,19 @@ function requireRunOrder(
   }
 }
 
+function rejectUntrustedAdvisorHelperExecution(
+  errors: string[],
+  steps: readonly WorkflowStep[],
+): void {
+  for (const step of steps) {
+    if (stringValue(step.run).includes("$ADVISOR_WORKDIR/tools/pr-review-advisor/")) {
+      errors.push(
+        `review step '${step.name ?? "<unnamed>"}' must not execute pr-review-advisor helpers from ADVISOR_WORKDIR`,
+      );
+    }
+  }
+}
+
 function requireEnv(
   errors: string[],
   owner: string,
@@ -314,6 +327,7 @@ function checkAnalysisJob(errors: string[], reviewJob: WorkflowRecord): void {
   const steps = asSteps(reviewJob.steps);
   if (steps.length === 0) errors.push("review job must declare steps");
   requireActionPins(errors, "review", steps);
+  rejectUntrustedAdvisorHelperExecution(errors, steps);
 
   if (steps.some((step) => step.name === "Checkout PR workspace (read-only data)")) {
     errors.push("pull_request_target data must be fetched manually, not with actions/checkout");
@@ -342,36 +356,38 @@ function checkAnalysisJob(errors: string[], reviewJob: WorkflowRecord): void {
   requireWith(errors, dispatchCheckout, "submodules", false);
 
   const prepare = requireStep(errors, steps, "Prepare isolated analysis workspace");
-  if (asRecord(prepare?.env).GIT_LFS_SKIP_SMUDGE !== "1") {
+  const prepareEnv = asRecord(prepare?.env);
+  if (prepareEnv.GIT_LFS_SKIP_SMUDGE !== "1") {
     errors.push("Prepare isolated analysis workspace must disable LFS smudging");
   }
-  const requiredPrepareFragments = [
-    '[[ ! "$TARGET_REPO" =~ ^[A-Za-z0-9_.-]+/',
-    '[[ ! "$TARGET_PR" =~ ^[0-9]+$ ]]',
-    '[[ ! "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]',
-    '[[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]',
-    "config core.hooksPath /dev/null",
-    "config submodule.recurse false",
-    "fetch --no-tags --no-recurse-submodules",
-    '"${BASE_FETCH}:refs/remotes/target/base"',
-    '"refs/pull/${TARGET_PR}/head:refs/remotes/target/pr-${TARGET_PR}"',
-    'rev-parse refs/remotes/target/base)" != "$PR_BASE_SHA"',
-    'ACTUAL_HEAD_SHA="$(git -C "$TARGET_DIR" rev-parse HEAD)"',
-    '"$ACTUAL_HEAD_SHA" != "$EXPECTED_HEAD_SHA"',
-  ];
-  for (const fragment of requiredPrepareFragments) requireRunContains(errors, prepare, fragment);
-  requireRunOrder(
+  // The fetch/validate/checkout logic lives in the trusted, unit-tested helper
+  // (prepare-target-pr.mts); the workflow must invoke it from the pinned advisor
+  // checkout ($ADVISOR_DIR), never from PR-controlled content.
+  requireRunContains(errors, prepare, "node --experimental-strip-types");
+  requireRunContains(
     errors,
     prepare,
-    '[[ ! "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]',
-    "fetch --no-tags --no-recurse-submodules target",
+    '"$ADVISOR_DIR/tools/pr-review-advisor/prepare-target-pr.mts"',
   );
-  requireRunOrder(
-    errors,
-    prepare,
-    'ACTUAL_HEAD_SHA="$(git -C "$TARGET_DIR" rev-parse HEAD)"',
-    'echo "ADVISOR_WORKDIR=$TARGET_DIR"',
-  );
+  // The base and head must be bound to the immutable SHAs in the triggering
+  // event so the helper's fail-closed SHA verification cannot be silently
+  // disabled by dropping the environment binding.
+  if (
+    prepare &&
+    !stringValue(prepareEnv.EXPECTED_HEAD_SHA).includes("github.event.pull_request.head.sha")
+  ) {
+    errors.push(
+      "Prepare isolated analysis workspace must bind EXPECTED_HEAD_SHA to the triggering PR head",
+    );
+  }
+  if (
+    prepare &&
+    !stringValue(prepareEnv.PR_BASE_SHA).includes("github.event.pull_request.base.sha")
+  ) {
+    errors.push(
+      "Prepare isolated analysis workspace must bind PR_BASE_SHA to the triggering PR base",
+    );
+  }
 
   const removeSymlinks = requireStep(errors, steps, "Remove symlinks from analysis workspace");
   if (removeSymlinks && stringValue(removeSymlinks.shell) !== "bash") {
@@ -424,8 +440,8 @@ done < <(find "$ADVISOR_WORKDIR" -type l -print0)`;
 
   const analyze = requireStep(errors, steps, "Run PR review advisor");
   requireRunContains(errors, analyze, 'cd "$ADVISOR_WORKDIR"');
-  requireRunContains(errors, analyze, '"$ADVISOR_DIR/tools/pr-review-advisor/analyze.mts"');
-  requireRunContains(errors, analyze, '"$ADVISOR_DIR/tools/pr-review-advisor/schema.json"');
+  requireRunContains(errors, analyze, "node --experimental-strip-types");
+  requireRunContains(errors, analyze, '"$ADVISOR_DIR/tools/pr-review-advisor/run-analysis.mts"');
   if (analyze && booleanValue(analyze["continue-on-error"]) !== true) {
     errors.push("Run PR review advisor must continue-on-error until artifacts are uploaded");
   }
@@ -573,43 +589,12 @@ function checkPublishJob(errors: string[], publishJob: WorkflowRecord): void {
   ) {
     errors.push("Validate advisor artifacts must use the trusted secondary download step outcome");
   }
-  for (const fragment of [
-    "lstatSync",
-    "isSymbolicLink",
-    "realpathSync",
-    "isDeepStrictEqual",
-    "PR_REVIEW_ADVISOR_MAX_RESULT_BYTES",
-    "PR_REVIEW_ADVISOR_MAX_SUMMARY_BYTES",
-    "JSON.parse",
-    'ANALYSIS_RESULT_PATH="$PUBLISH_ARTIFACT_DIR/pr-review-advisor-result.json"',
-    'RESULT_PATH="$PUBLISH_ARTIFACT_DIR/pr-review-advisor-final-result.json"',
-    'SUMMARY_PATH="$PUBLISH_ARTIFACT_DIR/pr-review-advisor-summary.md"',
-    'SECONDARY_ANALYSIS_RESULT_PATH="$SECONDARY_PUBLISH_ARTIFACT_DIR/pr-review-advisor-result.json"',
-    'SECONDARY_RESULT_PATH="$SECONDARY_PUBLISH_ARTIFACT_DIR/pr-review-advisor-final-result.json"',
-    'SECONDARY_SUMMARY_PATH="$SECONDARY_PUBLISH_ARTIFACT_DIR/pr-review-advisor-summary.md"',
-    '"$SECONDARY_ARTIFACT_OUTCOME" != "success"',
-    '"$SECONDARY_ARTIFACT_OUTCOME" != "failure"',
-    "result.version !== 1",
-    "result.headSha !== process.env.EXPECTED_HEAD_SHA",
-    "Array.isArray(result.findings)",
-    "result.e2e.coverage",
-    "result.e2e.targets",
-    "statusCount !== 1",
-    "validateAnalysisResult(analysisResult, finalResult, label)",
-    "let secondaryArtifactValidated = false",
-    'process.env.SECONDARY_ARTIFACT_OUTCOME === "success"',
-    "process.env.SECONDARY_PUBLISH_ARTIFACT_DIR",
-    "secondaryArtifactValidated = true",
-    "catch {",
-    "process.env.GITHUB_OUTPUT",
-    "secondary_artifact_validated=${secondaryArtifactValidated}",
-    'gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"',
-    '"$LIVE_HEAD_SHA" != "$EXPECTED_HEAD_SHA"',
-    '"$LIVE_BASE_SHA" != "$PR_BASE_SHA"',
-  ]) {
-    requireRunContains(errors, validate, fragment);
-  }
-  requireRunOrder(errors, validate, '"primary advisor",', "let secondaryArtifactValidated = false");
+  requireRunContains(errors, validate, "node --experimental-strip-types");
+  requireRunContains(
+    errors,
+    validate,
+    '"$ADVISOR_DIR/tools/pr-review-advisor/validate-artifacts.mts"',
+  );
 
   const comment = requireStep(errors, steps, "Post PR review advisor comment");
   if (
